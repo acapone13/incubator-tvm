@@ -23,7 +23,7 @@
  */
 
 #include <dmlc/memory_io.h>
-#include <tvm/logging.h>
+#include <tvm/support/logging.h>
 #include <tvm/runtime/container.h>
 #include <tvm/runtime/vm.h>
 #include <tvm/runtime/memory.h>
@@ -45,8 +45,14 @@ namespace tvm {
 namespace runtime {
 namespace vm {
 
+VMClosure::VMClosure(size_t func_index, std::vector<ObjectRef> free_vars) {
+  auto ptr = make_object<VMClosureObj>();
+  ptr->func_index = func_index;
+  ptr->free_vars = std::move(free_vars);
+  data_ = std::move(ptr);
+}
 
-inline Storage make_storage(size_t size, size_t alignment, TVMType dtype_hint, TVMContext ctx) {
+inline Storage make_storage(size_t size, size_t alignment, DLDataType dtype_hint, TVMContext ctx) {
   // We could put cache in here, from ctx to storage allocator.
   auto storage_obj = SimpleObjAllocator().make_object<StorageObj>();
   auto alloc = MemoryManager::Global()->GetAllocator(ctx);
@@ -169,7 +175,7 @@ Instruction& Instruction::operator=(const Instruction& instr) {
       this->result = instr.result;
       return *this;
     case Opcode::AllocTensor:
-      this->alloc_tensor.storage = this->alloc_tensor.storage;
+      this->alloc_tensor.storage = instr.alloc_tensor.storage;
       this->alloc_tensor.ndim = instr.alloc_tensor.ndim;
       this->alloc_tensor.shape = Duplicate<int64_t>(instr.alloc_tensor.shape,
                                                     instr.alloc_tensor.ndim);
@@ -336,7 +342,7 @@ Instruction Instruction::AllocTensorReg(
 
 Instruction Instruction::AllocStorage(RegName size,
                                       Index alignment,
-                                      TVMType dtype_hint,
+                                      DLDataType dtype_hint,
                                       Index dst) {
   Instruction instr;
   instr.op = Opcode::AllocStorage;
@@ -583,11 +589,11 @@ void InstructionPrint(std::ostream& os, const Instruction& instr) {
       break;
     }
     case Opcode::AllocStorage: {
-      os << "alloc_storage " <<
-        instr.dst << " " <<
-        instr.alloc_storage.allocation_size << " " <<
+      os << "alloc_storage $" <<
+        instr.dst << " $" <<
+        instr.alloc_storage.allocation_size << " $" <<
         instr.alloc_storage.alignment << " " <<
-        TVMType2String(instr.alloc_storage.dtype_hint);
+        DLDataType2String(instr.alloc_storage.dtype_hint);
       break;
     }
     default:
@@ -613,18 +619,14 @@ std::ostream& operator<<(std::ostream& os, const VMFunction& vm_func) {
   return os;
 }
 
-ObjectRef CopyTo(ObjectRef src, const DLContext& ctx) {
-  if (const TensorObj* obj = src.as<TensorObj>()) {
-    auto tensor = obj->data;
-    if (tensor->ctx.device_type != ctx.device_type) {
-      auto copy = tensor.CopyTo(ctx);
-      return Tensor(copy);
-    } else {
-      return src;
+inline ObjectRef CopyTo(ObjectRef src, const DLContext& ctx) {
+  if (src->IsInstance<NDArray::ContainerType>()) {
+    auto nd_array = Downcast<NDArray>(src);
+    if (nd_array->ctx.device_type != ctx.device_type) {
+      return nd_array.CopyTo(ctx);
     }
-  } else {
-    return src;
   }
+  return src;
 }
 
 PackedFunc VirtualMachine::GetFunction(const std::string& name,
@@ -770,14 +772,12 @@ void VirtualMachine::InvokePacked(Index packed_index, const PackedFunc& func,
     if (const auto* dt_cell = args[i].as<ADTObj>()) {
       for (size_t fi = 0; fi < dt_cell->size; ++fi) {
         auto obj = (*dt_cell)[fi];
-        const auto* tensor = obj.as<TensorObj>();
-        CHECK(tensor != nullptr);
-        setter(idx++, tensor->data);
+        auto nd_array = Downcast<NDArray>(obj);
+        setter(idx++, nd_array);
       }
     } else {
-      const auto* tensor = args[i].as<TensorObj>();
-      CHECK(tensor != nullptr);
-      setter(idx++, tensor->data);
+      auto nd_array = Downcast<NDArray>(args[i]);
+      setter(idx++, nd_array);
     }
   }
 
@@ -822,9 +822,8 @@ inline ObjectRef VirtualMachine::ReadRegister(Index r) const {
 inline int32_t VirtualMachine::LoadScalarInt(Index r) const {
   int32_t result;
   const auto& obj = ReadRegister(r);
-  const auto* tensor = obj.as<TensorObj>();
-  CHECK(tensor != nullptr);
-  NDArray array = tensor->data.CopyTo({kDLCPU, 0});
+  auto nd_array = Downcast<NDArray>(obj);
+  NDArray array = nd_array.CopyTo({kDLCPU, 0});
 
   if (array->dtype.bits <= 8) {
     result = reinterpret_cast<int8_t*>(array->data)[0];
@@ -880,7 +879,7 @@ void VirtualMachine::RunLoop() {
       case Opcode::LoadConsti: {
         auto tensor = NDArray::Empty({1}, {kDLInt, 64, 1}, {kDLCPU, 0});
         reinterpret_cast<int64_t*>(tensor->data)[0] = instr.load_consti.val;
-        WriteRegister(instr.dst, Tensor(tensor));
+        WriteRegister(instr.dst, tensor);
         pc_++;
         goto main_loop;
       }
@@ -913,7 +912,7 @@ void VirtualMachine::RunLoop() {
       }
       case Opcode::InvokeClosure: {
         auto object = ReadRegister(instr.closure);
-        const auto* closure = object.as<ClosureObj>();
+        const auto* closure = object.as<VMClosureObj>();
 
         std::vector<ObjectRef> args;
         for (auto free_var : closure->free_vars) {
@@ -940,7 +939,7 @@ void VirtualMachine::RunLoop() {
         auto tag = adt.tag();
         auto tag_tensor = NDArray::Empty({1}, {kDLInt, 32, 1}, {kDLCPU, 0});
         reinterpret_cast<int32_t*>(tag_tensor->data)[0] = tag;
-        WriteRegister(instr.dst, Tensor(tag_tensor));
+        WriteRegister(instr.dst, tag_tensor);
         pc_++;
         goto main_loop;
       }
@@ -971,9 +970,8 @@ void VirtualMachine::RunLoop() {
 
         auto storage_obj = ReadRegister(instr.alloc_tensor.storage);
         auto storage = Downcast<Storage>(storage_obj);
-        auto data = storage->AllocNDArray(0, shape, instr.alloc_tensor.dtype);
+        auto obj = storage->AllocNDArray(0, shape, instr.alloc_tensor.dtype);
 
-        auto obj = Tensor(data);
         WriteRegister(instr.dst, obj);
         pc_++;
         goto main_loop;
@@ -983,9 +981,8 @@ void VirtualMachine::RunLoop() {
         cpu_ctx.device_type = kDLCPU;
         cpu_ctx.device_id = 0;
         auto shape_tensor_obj = ReadRegister(instr.alloc_tensor_reg.shape_register);
-        const auto* tensor = shape_tensor_obj.as<TensorObj>();
-        CHECK(tensor != nullptr);
-        NDArray shape_tensor = tensor->data.CopyTo(cpu_ctx);
+        const auto shape_arr = Downcast<NDArray>(shape_tensor_obj);
+        NDArray shape_tensor = shape_arr.CopyTo(cpu_ctx);
         const DLTensor* dl_tensor = shape_tensor.operator->();
         CHECK_EQ(dl_tensor->dtype.code, 0u);
         CHECK_LE(dl_tensor->dtype.bits, 64);
@@ -996,9 +993,8 @@ void VirtualMachine::RunLoop() {
 
         auto storage_obj = ReadRegister(instr.alloc_tensor_reg.storage);
         auto storage = Downcast<Storage>(storage_obj);
-        auto data = storage->AllocNDArray(0, shape, instr.alloc_tensor_reg.dtype);
+        auto obj = storage->AllocNDArray(0, shape, instr.alloc_tensor_reg.dtype);
 
-        auto obj = Tensor(data);
         WriteRegister(instr.dst, obj);
         pc_++;
         goto main_loop;
@@ -1018,7 +1014,7 @@ void VirtualMachine::RunLoop() {
         for (Index i = 0; i < instr.num_freevar; i++) {
           free_vars.push_back(ReadRegister(instr.free_vars[i]));
         }
-        WriteRegister(instr.dst, Closure(instr.func_index, free_vars));
+        WriteRegister(instr.dst, VMClosure(instr.func_index, free_vars));
         pc_++;
         goto main_loop;
       }
@@ -1029,7 +1025,7 @@ void VirtualMachine::RunLoop() {
         DLOG(INFO) <<
           "AllocStorage: allocation_size=" << size <<
           "alignment=" << alignment <<
-          "dtype_hint=" << TVMType2String(instr.alloc_storage.dtype_hint);
+          "dtype_hint=" << DLDataType2String(instr.alloc_storage.dtype_hint);
 
         auto storage = make_storage(size, alignment, instr.alloc_storage.dtype_hint, ctxs_[0]);
         WriteRegister(instr.dst, storage);
@@ -1061,7 +1057,7 @@ runtime::Module CreateVirtualMachine(const Executable* exec) {
   return runtime::Module(vm);
 }
 
-TVM_REGISTER_GLOBAL("relay._vm._VirtualMachine")
+TVM_REGISTER_GLOBAL("runtime._VirtualMachine")
 .set_body([](TVMArgs args, TVMRetValue* rv) {
   runtime::Module mod = args[0];
   const auto* exec = dynamic_cast<Executable*>(mod.operator->());

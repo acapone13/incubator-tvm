@@ -15,7 +15,7 @@
     specific language governing permissions and limitations
     under the License.
 
-TOPI
+topi
 ----
 .. automodule:: topi
 
@@ -33,6 +33,8 @@ List of operators
    topi.round
    topi.abs
    topi.isnan
+   topi.isfinite
+   topi.isinf
    topi.exp
    topi.tanh
    topi.log
@@ -47,6 +49,7 @@ List of operators
    topi.strided_slice
    topi.expand_dims
    topi.reshape
+   topi.unravel_index
    topi.squeeze
    topi.concatenate
    topi.split
@@ -96,6 +99,7 @@ List of operators
    topi.logical_and
    topi.logical_or
    topi.logical_not
+   topi.logical_xor
    topi.arange
    topi.stack
    topi.repeat
@@ -104,6 +108,8 @@ List of operators
    topi.ndarray_size
    topi.layout_transform
    topi.image.resize
+   topi.image.crop_and_resize
+   topi.image.dilation2d
    topi.argsort
    topi.topk
    topi.sequence_mask
@@ -131,6 +137,8 @@ topi
 .. autofunction:: topi.round
 .. autofunction:: topi.abs
 .. autofunction:: topi.isnan
+.. autofunction:: topi.isfinite
+.. autofunction:: topi.isinf
 .. autofunction:: topi.exp
 .. autofunction:: topi.tanh
 .. autofunction:: topi.log
@@ -145,6 +153,7 @@ topi
 .. autofunction:: topi.strided_slice
 .. autofunction:: topi.expand_dims
 .. autofunction:: topi.reshape
+.. autofunction:: topi.unravel_index
 .. autofunction:: topi.squeeze
 .. autofunction:: topi.concatenate
 .. autofunction:: topi.split
@@ -185,6 +194,7 @@ topi
 .. autofunction:: topi.logical_and
 .. autofunction:: topi.logical_or
 .. autofunction:: topi.logical_not
+.. autofunction:: topi.logical_xor
 
 topi.nn
 ~~~~~~~
@@ -207,6 +217,7 @@ topi.nn
 topi.image
 ~~~~~~~~~~
 .. autofunction:: topi.image.resize
+.. autofunction:: topi.image.crop_and_resize
 
 topi.sparse
 ~~~~~~~~~~~

@@ -30,8 +30,6 @@
 //!
 //! Checkout the `examples` repository for more details.
 
-#![feature(box_syntax)]
-
 #[macro_use]
 extern crate failure;
 #[macro_use]
@@ -55,10 +53,12 @@ pub use crate::{
     ndarray::NDArray,
     tvm_common::{
         errors as common_errors,
-        ffi::{self, TVMByteArray, TVMType},
+        ffi::{self, DLDataType, TVMByteArray},
         packed_func::{TVMArgValue, TVMRetValue},
     },
 };
+
+pub type DataType = DLDataType;
 
 // Macro to check the return call to TVM runtime shared library.
 macro_rules! check_call {

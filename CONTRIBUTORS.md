@@ -20,7 +20,7 @@ TVM Contributors
 TVM adopts the Apache way and governs by merit. We believe that it is important to create an inclusive community where everyone can use,
 contribute to, and influence the direction of the project. We actively invite contributors who have earned the merit to be part of the development community.
 
-See the [community structure document](http://docs.tvm.ai/contribute/community.html) for the explanation of community structure and contribution guidelines.
+See the [community structure document](https://tvm.apache.org/docs/contribute/community.html) for the explanation of community structure and contribution guidelines.
 
 ## Mentors
 
@@ -41,10 +41,14 @@ We do encourage everyone to work anything they are interested in.
 
 - [Aditya Atluri](https://github.com/adityaatluri): @adityaatluri - rocm
 - [Tianqi Chen](https://github.com/tqchen) (PPMC): @tqchen - topi, compiler, relay, docs
+- [Liangfu Chen](https://github.com/liangfu): @liangfu - vta, chisel, intel FPGA, c runtime
+- [Wei Chen](https://github.com/wweic): @wweic - runtime, relay, vm
 - [Zhi Chen](https://github.com/zhiics): @zhiics - relay, quantization, pass manager
 - [Yuwei Hu](https://github.com/Huyuwei): @Huyuwei - topi, frontends
 - [Nick Hynes](https://github.com/nhynes): @nhynes: - sgx, rust
+- [Animesh Jain](https://github.com/anijain2305): @anijain2305 - quantization, relay
 - [Ziheng Jiang](https://github.com/ZihengJiang) (PPMC): @ZihengJiang - relay, compiler
+- [Marisa Kirisame](https://github.com/MarisaKirisame): @MarisaKirisame - relay
 - [Wuwei Lin](https://github.com/vinx13): @vinx13 - relay, topi
 - [Yizhi Liu](https://github.com/yzhliu) (PPMC): @yzhliu - jvm, topi, relay
 - [Hao Lu](https://github.com/hlu1): @hlu1 - nnpack, frontends
@@ -59,24 +63,28 @@ We do encourage everyone to work anything they are interested in.
 - [Leyuan Wang](https://github.com/Laurawly): @Laurawly: - topi
 - [Yao Wang](https://github.com/kevinthesun): @kevinthesun: - topi, vision
 - [Jian Weng](https://github.com/were): @were: - hybrid script
+- [Zhao Wu](https://github.com/FrozenGene): @FrozenGene - runtime, topi, frontends
 - [Eddie Yan](https://github.com/eqy) (PPMC): @eqy - runtime, autotvm, rpc, topi
 - [Lianmin Zheng](https://github.com/merrymercy) (PPMC): @merrymercy - autotvm, topi, relay
 
 ## Reviewers
 
 - [Aditya Atluri](https://github.com/adityaatluri): @adityaatluri
+- [Matthew Barrett](https://github.com/mbaret): @mbaret
+- [Arnaud Bergeron](https://github.com/abergeron): @abergeron
 - [Tianqi Chen](https://github.com/tqchen): @tqchen
 - [Liangfu Chen](https://github.com/liangfu): @liangfu
-- [Wei Chen](https://github.com/wweic): @wweic
 - [Zhi Chen](https://github.com/zhiics): @zhiics
 - [Neo Chien](https://github.com/cchung100m): @cchung100m
 - [Meghan Cowan](https://github.com/cowanmeg): @cowanmeg
 - [Balint Cristian](https://github.com/cbalint13): @cbalint13
+- [Josh Fromm](https://github.com/jwfromm): @jwfromm
 - [Sergei Grechanik](https://github.com/sgrechanik-h): @sgrechanik-h
 - [Hao Lu](https://github.com/hlu1): @hlu1
 - [Nick Hynes](https://github.com/nhynes): @nhynes
 - [Yuwei Hu](https://github.com/Huyuwei): @Huyuwei
 - [Animesh Jain](https://github.com/anijain2305): @anijain2305
+- [Hua Jiang](https://github.com/huajsj): @huajsj
 - [Yizhi Liu](https://github.com/yzhliu) : @yzhliu
 - [Zhixun Tan](https://github.com/phisiart): @phisiart
 - [Zhi Chen](https://github.com/zhiics): @zhiics
@@ -84,6 +92,7 @@ We do encourage everyone to work anything they are interested in.
 - [Ziheng Jiang](https://github.com/ZihengJiang): @ZihengJiang
 - [Marisa Kirisame](https://github.com/MarisaKirisame): @MarisaKirisame
 - [Wuwei Lin](https://github.com/vinx13): @vinx13
+- [Henry Liu](https://github.com/optima2005): @optima2005
 - [Steven Lyubomirsky](https://github.com/slyubomirsky): @slyubomirsky
 - [Masahiro Masuda](https://github.com/masahi): @masahi
 - [Sergey Mironov](https://github.com/grwlf): @grwlf
@@ -91,6 +100,7 @@ We do encourage everyone to work anything they are interested in.
 - [Kazutaka Morita](https://github.com/kazum): @kazum
 - [Tatsuya Nishiyama](https://github.com/nishi-t): @nishi-t
 - [Pariksheet Pinjari](https://github.com/PariksheetPinjari909): @PariksheetPinjari909
+- [Krzysztof Parzyszek](https://github.com/kparzysz-quic): @kparzysz-quic
 - [Josh Pollock](https://github.com/joshpoll): @joshpoll
 - [Jared Roesch](https://github.com/jroesch): @jroesch
 - [Siva](https://github.com/srkreddy1238): @srkreddy1238
@@ -110,6 +120,7 @@ We do encourage everyone to work anything they are interested in.
 - [Zhao Wu](https://github.com/FrozenGene): @FrozenGene
 - [Bing Xu](https://github.com/antinucleon): @antinucleon
 - [Eddie Yan](https://github.com/eqy): @eqy
+- [Hao Yu](https://github.com/comaniac): @comaniac
 - [Joshua Z. Zhang](https://github.com/zhreshold): @zhreshold
 - [Lianmin Zheng](https://github.com/merrymercy): @merrymercy
 

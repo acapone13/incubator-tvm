@@ -23,27 +23,48 @@
  */
 #include <dmlc/json.h>
 #include <dmlc/memory_io.h>
-
+#include <tvm/runtime/registry.h>
 #include <tvm/runtime/ndarray.h>
 #include <tvm/runtime/packed_func.h>
 #include <tvm/node/container.h>
 #include <tvm/node/reflection.h>
 #include <tvm/node/serialization.h>
-#include <tvm/attrs.h>
+#include <tvm/ir/attrs.h>
 
 #include <string>
+#include <cctype>
 #include <map>
 
-#include "../common/base64.h"
+#include "../support/base64.h"
 
 namespace tvm {
 
 inline std::string Type2String(const DataType& t) {
-  return runtime::TVMType2String(Type2TVMType(t));
+  return runtime::DLDataType2String(t);
 }
 
-inline Type String2Type(std::string s) {
-  return TVMType2Type(runtime::String2TVMType(s));
+inline DataType String2Type(std::string s) {
+  return DataType(runtime::String2DLDataType(s));
+}
+
+inline std::string Base64Decode(std::string s) {
+  dmlc::MemoryStringStream mstrm(&s);
+  support::Base64InStream b64strm(&mstrm);
+  std::string output;
+  b64strm.InitPosition();
+  dmlc::Stream* strm = &b64strm;
+  strm->Read(&output);
+  return output;
+}
+
+inline std::string Base64Encode(std::string s) {
+  std::string blob;
+  dmlc::MemoryStringStream mstrm(&blob);
+  support::Base64OutStream b64strm(&mstrm);
+  dmlc::Stream* strm = &b64strm;
+  strm->Write(s);
+  b64strm.Finish();
+  return blob;
 }
 
 // indexer to index all the nodes
@@ -79,7 +100,7 @@ class NodeIndexer : public AttrVisitor {
   // make index of all the children of node
   void MakeIndex(Object* node) {
     if (node == nullptr) return;
-    CHECK(node->IsInstance<Node>());
+    CHECK(node->IsInstance<Object>());
 
     if (node_index_.count(node)) return;
     CHECK_EQ(node_index_.size(), node_list_.size());
@@ -103,7 +124,10 @@ class NodeIndexer : public AttrVisitor {
         MakeIndex(const_cast<Object*>(kv.second.get()));
       }
     } else {
-      reflection_->VisitAttrs(node, this);
+      // if the node already have repr bytes, no need to visit Attrs.
+      if (!reflection_->GetReprBytes(node, nullptr)) {
+        reflection_->VisitAttrs(node, this);
+      }
     }
   }
 };
@@ -115,8 +139,8 @@ using AttrMap = std::map<std::string, std::string>;
 struct JSONNode {
   /*! \brief The type of key of the object. */
   std::string type_key;
-  /*! \brief The global key for global object. */
-  std::string global_key;
+  /*! \brief The str repr representation. */
+  std::string repr_bytes;
   /*! \brief the attributes */
   AttrMap attrs;
   /*! \brief keys of a map. */
@@ -127,8 +151,15 @@ struct JSONNode {
   void Save(dmlc::JSONWriter *writer) const {
     writer->BeginObject();
     writer->WriteObjectKeyValue("type_key", type_key);
-    if (global_key.size() != 0) {
-      writer->WriteObjectKeyValue("global_key", global_key);
+    if (repr_bytes.size() != 0) {
+      // choose to use str representation or base64, based on whether
+      // the byte representation is printable.
+      if (std::all_of(repr_bytes.begin(), repr_bytes.end(),
+                      [](char ch) { return std::isprint(ch); })) {
+        writer->WriteObjectKeyValue("repr_str", repr_bytes);
+      } else {
+        writer->WriteObjectKeyValue("repr_b64", Base64Encode(repr_bytes));
+      }
     }
     if (attrs.size() != 0) {
       writer->WriteObjectKeyValue("attrs", attrs);
@@ -145,15 +176,24 @@ struct JSONNode {
   void Load(dmlc::JSONReader *reader) {
     attrs.clear();
     data.clear();
-    global_key.clear();
+    repr_bytes.clear();
     type_key.clear();
+    std::string repr_b64, repr_str;
     dmlc::JSONObjectReadHelper helper;
     helper.DeclareOptionalField("type_key", &type_key);
-    helper.DeclareOptionalField("global_key", &global_key);
+    helper.DeclareOptionalField("repr_b64", &repr_b64);
+    helper.DeclareOptionalField("repr_str", &repr_str);
     helper.DeclareOptionalField("attrs", &attrs);
     helper.DeclareOptionalField("keys", &keys);
     helper.DeclareOptionalField("data", &data);
     helper.ReadAllFields(reader);
+
+    if (repr_str.size() != 0) {
+      CHECK_EQ(repr_b64.size(), 0U);
+      repr_bytes = std::move(repr_str);
+    } else if (repr_b64.size() != 0) {
+      repr_bytes = Base64Decode(repr_b64);
+    }
   }
 };
 
@@ -212,10 +252,8 @@ class JSONAttrGetter : public AttrVisitor {
       return;
     }
     node_->type_key = node->GetTypeKey();
-    node_->global_key = reflection_->GetGlobalKey(node);
-    // No need to recursively visit fields of global singleton
-    // They are registered via the environment.
-    if (node_->global_key.length() != 0) return;
+    // do not need to print additional things once we have repr bytes.
+    if (reflection_->GetReprBytes(node, &(node_->repr_bytes))) return;
 
     // populates the fields.
     node_->attrs.clear();
@@ -392,7 +430,7 @@ struct JSONGraph {
     for (DLTensor* tensor : indexer.tensor_list_) {
       std::string blob;
       dmlc::MemoryStringStream mstrm(&blob);
-      common::Base64OutStream b64strm(&mstrm);
+      support::Base64OutStream b64strm(&mstrm);
       runtime::SaveDLTensor(&b64strm, tensor);
       b64strm.Finish();
       g.b64ndarrays.emplace_back(std::move(blob));
@@ -420,7 +458,7 @@ ObjectRef LoadJSON(std::string json_str) {
   // load in tensors
   for (const std::string& blob : jgraph.b64ndarrays) {
     dmlc::MemoryStringStream mstrm(const_cast<std::string*>(&blob));
-    common::Base64InStream b64strm(&mstrm);
+    support::Base64InStream b64strm(&mstrm);
     b64strm.InitPosition();
     runtime::NDArray temp;
     CHECK(temp.Load(&b64strm));
@@ -434,7 +472,7 @@ ObjectRef LoadJSON(std::string json_str) {
   for (const JSONNode& jnode : jgraph.nodes) {
     if (jnode.type_key.length() != 0) {
       ObjectPtr<Object> node =
-          reflection->CreateInitObject(jnode.type_key, jnode.global_key);
+          reflection->CreateInitObject(jnode.type_key, jnode.repr_bytes);
       nodes.emplace_back(node);
     } else {
       nodes.emplace_back(ObjectPtr<Object>());
@@ -447,12 +485,21 @@ ObjectRef LoadJSON(std::string json_str) {
 
   for (size_t i = 0; i < nodes.size(); ++i) {
     setter.node_ = &jgraph.nodes[i];
-    // do not need to recover content of global singleton object
-    // they are registered via the environment
-    if (setter.node_->global_key.length() == 0) {
+    // Skip the nodes that has an repr bytes representation.
+    // NOTE: the second condition is used to guard the case
+    // where the repr bytes itself is an empty string "".
+    if (setter.node_->repr_bytes.length() == 0 &&
+        nodes[i] != nullptr &&
+        !reflection->GetReprBytes(nodes[i].get(), nullptr)) {
       setter.Set(nodes[i].get());
     }
   }
   return ObjectRef(nodes.at(jgraph.root));
 }
+
+TVM_REGISTER_GLOBAL("node.SaveJSON")
+.set_body_typed(SaveJSON);
+
+TVM_REGISTER_GLOBAL("node.LoadJSON")
+.set_body_typed(LoadJSON);
 }  // namespace tvm

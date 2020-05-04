@@ -97,7 +97,7 @@ Import the Model
 Explicit Shape:
 ~~~~~~~~~~~~~~~
 
-To ensure shapes can be known throughout the entire graph, pass the ```shape``` argument to ```from_tensorflow```. This dictionary maps input names to input shapes. Please refer to these `test cases <https://github.com/apache/incubator-tvm/blob/master/nnvm/tests/python/frontend/tensorflow/test_forward.py#L36>`_ for examples.
+To ensure shapes can be known throughout the entire graph, pass the ```shape``` argument to ```from_tensorflow```. This dictionary maps input names to input shapes. Please refer to these `test cases <https://github.com/apache/incubator-tvm/blob/master/tests/python/frontend/tensorflow/test_forward.py#L36>`_ for examples.
 
 Data Layout
 ~~~~~~~~~~~
@@ -135,10 +135,12 @@ Supported Ops
 - ConcatV2
 - Conv2D
 - Cos
+- Tan
 - CropAndResize
 - DecodeJpeg
 - DepthwiseConv2dNative
 - DepthToSpace
+- Dilation2D
 - Equal
 - Elu
 - Enter
@@ -158,6 +160,9 @@ Supported Ops
 - Greater
 - GreaterEqual
 - Identity
+- IsFinite
+- IsInf
+- IsNan
 - LeakyRelu
 - LeftShift
 - Less
@@ -240,5 +245,6 @@ Supported Ops
 - Transpose
 - TruncateMod
 - Unpack
+- UnravelIndex
 - Where
 - ZerosLike

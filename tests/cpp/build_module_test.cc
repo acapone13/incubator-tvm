@@ -20,24 +20,24 @@
 #include <dmlc/logging.h>
 #include <gtest/gtest.h>
 #include <topi/cuda/injective.h>
-#include <tvm/operation.h>
+#include <tvm/te/operation.h>
 #include <tvm/runtime/registry.h>
-#include <tvm/packed_func_ext.h>
-#include <tvm/build_module.h>
+#include <tvm/driver/driver_api.h>
 
 #include <string>
 #include <cmath>
 
 TEST(BuildModule, Basic) {
   using namespace tvm;
+  using namespace tvm::te;
   auto n = var("n");
-  Array<Expr> shape;
+  Array<PrimExpr> shape;
   shape.push_back(n);
 
-  auto A = placeholder(shape, Float(32), "A");
-  auto B = placeholder(shape, Float(32), "B");
+  auto A = placeholder(shape, DataType::Float(32), "A");
+  auto B = placeholder(shape, DataType::Float(32), "B");
 
-  auto C = compute(A->shape, [&A, &B](Expr i) {
+  auto C = compute(A->shape, [&A, &B](PrimExpr i) {
     return A[i] + B[i];
   }, "C");
 
@@ -75,8 +75,8 @@ TEST(BuildModule, Heterogeneous) {
    */
 
   using namespace tvm;
-  const runtime::PackedFunc* pf = runtime::Registry::Get("module._Enabled");
-  bool enabled = (*pf)("cuda");
+  using namespace tvm::te;
+  bool enabled = tvm::runtime::RuntimeEnabled("cuda");
   if (!enabled) {
     LOG(INFO) << "Skip heterogeneous test because cuda is not enabled."
               << "\n";
@@ -88,26 +88,26 @@ TEST(BuildModule, Heterogeneous) {
 
   // The shape of input tensors.
   const int n = 4;
-  Array<Expr> shape{n};
+  Array<PrimExpr> shape{n};
 
-  auto A = placeholder(shape, Float(32), "A");
-  auto B = placeholder(shape, Float(32), "B");
-  auto C = placeholder(shape, Float(32), "C");
+  auto A = placeholder(shape, DataType::Float(32), "A");
+  auto B = placeholder(shape, DataType::Float(32), "B");
+  auto C = placeholder(shape, DataType::Float(32), "C");
 
-  auto elemwise_add = compute(A->shape, [&A, &B](Expr i) {
+  auto elemwise_add = compute(A->shape, [&A, &B](PrimExpr i) {
     return A[i] + B[i];
   }, "elemwise_add");
 
-  auto copy = placeholder(shape, Float(32), "__copy");
-  auto elemwise_sub = compute(C->shape, [&copy, &C](Expr i) {
+  auto copy = placeholder(shape, DataType::Float(32), "__copy");
+  auto elemwise_sub = compute(C->shape, [&copy, &C](PrimExpr i) {
     return copy[i] - C[i];
   }, "elemwise_sub");
 
-  const runtime::PackedFunc* enter_target_scope_func = runtime::Registry::Get("_EnterTargetScope");
-  (*enter_target_scope_func)(target_cuda);
+  With<Target> cuda_scope(target_cuda);
   auto s1 = topi::cuda::schedule_injective(target_cuda, {elemwise_add});
 
-  (*enter_target_scope_func)(target_llvm);
+
+  With<Target> llvm_scope(target_llvm);
   auto s2 = create_schedule({elemwise_sub->op});
 
   auto config = BuildConfig::Create();
@@ -117,8 +117,8 @@ TEST(BuildModule, Heterogeneous) {
   std::unordered_map<Tensor, Buffer> binds;
   auto lowered_s1 = lower(s1, args1, "elemwise_add", binds, config);
   auto lowered_s2 = lower(s2, args2, "elemwise_sub", binds, config);
-  Map<tvm::Target, Array<LoweredFunc>> inputs = {{target_cuda, lowered_s1},
-                                                 {target_llvm, lowered_s2}};
+  Map<tvm::Target, IRModule> inputs = {{target_cuda, lowered_s1},
+                                       {target_llvm, lowered_s2}};
   auto module = build(inputs, Target(), config);
 
   // Assertion for build.
@@ -155,9 +155,9 @@ TEST(BuildModule, Heterogeneous) {
   auto c_val =
       runtime::NDArray::Empty({n}, {kDLFloat, 32, 1}, {kDLCPU, 0});
 
-  auto pa = (float*)a_val.ToDLPack()->dl_tensor.data;
-  auto pb = (float*)b_val.ToDLPack()->dl_tensor.data;
-  auto pc = (float*)c_val.ToDLPack()->dl_tensor.data;
+  auto pa = (float*)(a_val->data);
+  auto pb = (float*)(b_val->data);
+  auto pc = (float*)(c_val->data);
 
   // Assign values.
   for (int i = 0; i < n; i++) {
@@ -177,6 +177,16 @@ TEST(BuildModule, Heterogeneous) {
   runtime::Module mod = (*graph_runtime)(
       json, module, cpu_dev_ty, cpu_dev_id, gpu_dev_ty, gpu_dev_id);
 
+  // test FFI for module.
+  auto test_ffi = PackedFunc([](TVMArgs args, TVMRetValue* rv) {
+    int tcode = args[1];
+    CHECK_EQ(args[0].type_code(), tcode);
+  });
+
+  test_ffi(runtime::Module(mod), static_cast<int>(kTVMModuleHandle));
+  test_ffi(Optional<runtime::Module>(mod), static_cast<int>(kTVMModuleHandle));
+
+
   PackedFunc set_input = mod.GetFunction("set_input", false);
   PackedFunc run = mod.GetFunction("run", false);
   PackedFunc get_output = mod.GetFunction("get_output", false);
@@ -186,7 +196,7 @@ TEST(BuildModule, Heterogeneous) {
 
   run();
   tvm::runtime::NDArray out = get_output(0);
-  float* p_out = (float*)out.ToDLPack()->dl_tensor.data;
+  float* p_out = (float*)out->data;
 
   // Check correctness.
   for (int i = 0; i < n; ++i) {

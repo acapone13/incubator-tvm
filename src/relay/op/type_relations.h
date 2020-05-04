@@ -25,7 +25,7 @@
 #ifndef TVM_RELAY_OP_TYPE_RELATIONS_H_
 #define TVM_RELAY_OP_TYPE_RELATIONS_H_
 
-#include <tvm/relay/error.h>
+#include <tvm/ir/error.h>
 #include <tvm/relay/type.h>
 #include <string>
 
@@ -78,6 +78,11 @@ bool BroadcastCompRel(const Array<Type>& types,
                       int num_inputs,
                       const Attrs& attrs,
                       const TypeReporter& reporter);
+
+bool IdentityCompRel(const Array<Type>& types,
+                 int num_inputs,
+                 const Attrs& attrs,
+                 const TypeReporter& reporter);
 
 Array<IndexExpr> RankShape(const Array<IndexExpr>& shape);
 

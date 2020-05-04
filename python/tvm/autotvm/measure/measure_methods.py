@@ -33,9 +33,12 @@ import tempfile
 
 import numpy as np
 
-from ... import ir_pass, build, build_config, nd, TVMError, register_func, \
-    rpc as _rpc, target as _target
-from ...contrib import nvcc, ndk, tar
+import tvm._ffi
+from tvm import nd, rpc as _rpc, target as _target
+from tvm.error import TVMError
+from tvm.target import build_config
+from tvm.driver import build
+from tvm.contrib import nvcc, ndk, tar
 
 from ..util import get_const_tuple
 from ..env import AutotvmGlobalScope
@@ -93,7 +96,7 @@ class LocalBuilder(Builder):
     def build(self, measure_inputs):
         results = []
 
-        shutil.rmtree(self.tmp_dir)
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
         self.tmp_dir = tempfile.mkdtemp()
 
         for i in range(0, len(measure_inputs), self.n_parallel):
@@ -242,6 +245,8 @@ class RPCRunner(Runner):
 
             if 'cuda' in self.task.target.keys:
                 kwargs["cuda_arch"] = "sm_" + "".join(ctx.compute_version.split('.'))
+        if self.task.target.device_name == 'micro_dev':
+            kwargs.setdefault('build_option', {})['disable_vectorize'] = True
 
         return kwargs
 
@@ -270,8 +275,9 @@ class RPCRunner(Runner):
                 if isinstance(res, Exception):   # executor error or timeout
                     results.append(MeasureResult((str(res),), MeasureErrorNo.RUN_TIMEOUT,
                                                  self.timeout, time.time()))
-                else:
-                    results.append(res)
+                    raise Exception(f'encountered exception during measurement: {results}')
+
+                results.append(res)
 
         return results
 
@@ -324,11 +330,11 @@ class LocalRunner(RPCRunner):
         self.server = None
 
     def set_task(self, task):
-        self.task = task
-
+        # pylint: disable=import-outside-toplevel
         from ...rpc.tracker import Tracker
         from ...rpc.server import Server
 
+        self.task = task
         tracker = Tracker('0.0.0.0', port=9000, port_end=10000, silent=True)
         device_key = '$local$device$%d' % tracker.port
         server = Server('0.0.0.0', port=9000, port_end=10000,
@@ -362,6 +368,7 @@ def _build_func_common(measure_input, check_gpu=None, cuda_arch=None, build_opti
         # if target is vta, we need to use vta build
         if hasattr(measure_input.target, 'device_name') and \
             measure_input.target.device_name == 'vta':
+            # pylint: disable=import-outside-toplevel
             import vta
             func = vta.build(s, args, target_host=task.target_host)
         else:
@@ -460,6 +467,7 @@ def run_through_rpc(measure_input, build_result,
         # Program the FPGA every single time when targeting VTA
         if hasattr(measure_input.target, 'device_name') and \
             measure_input.target.device_name == 'vta':
+            # pylint: disable=import-outside-toplevel
             from vta import program_fpga, reconfig_runtime
             program_fpga(remote, None)
             reconfig_runtime(remote)
@@ -579,7 +587,7 @@ def check_remote(target, device_key, host=None, port=None, priority=100, timeout
     return not t.is_alive()
 
 
-@register_func
+@tvm._ffi.register_func
 def tvm_callback_cuda_compile(code):
     """use nvcc to generate ptx code for better optimization"""
     curr_cuda_target_arch = AutotvmGlobalScope.current.cuda_target_arch
@@ -609,9 +617,9 @@ def gpu_verify_pass(**kwargs):
     """Verify the validity of a gpu kernel.
     This pass will check memory usage and number of threads per block.
     """
-    def verify_pass(stmt):
-        valid = ir_pass.VerifyGPUCode(stmt, kwargs)
+    def verify_pass(f, *_):
+        valid = tvm.tir.analysis.verify_gpu_code(f, kwargs)
         if not valid:
             raise InstantiationError("Skipped because of invalid gpu kernel")
-        return stmt
-    return verify_pass
+        return f
+    return tvm.tir.transform.prim_func_pass(verify_pass, opt_level=0)

@@ -25,9 +25,13 @@
 #include <tvm/node/node.h>
 #include <tvm/node/container.h>
 #include <tvm/node/reflection.h>
-#include <tvm/attrs.h>
+#include <tvm/ir/attrs.h>
 
 namespace tvm {
+
+using runtime::TVMRetValue;
+using runtime::TVMArgs;
+using runtime::PackedFunc;
 
 // Attr getter.
 class AttrGetter : public AttrVisitor {
@@ -61,7 +65,7 @@ class AttrGetter : public AttrVisitor {
   void Visit(const char* key, void** value) final {
     if (skey == key) *ret = static_cast<void*>(value[0]);
   }
-  void Visit(const char* key, Type* value) final {
+  void Visit(const char* key, DataType* value) final {
     if (skey == key) *ret = value[0];
   }
   void Visit(const char* key, std::string* value) final {
@@ -93,7 +97,7 @@ runtime::TVMRetValue ReflectionVTable::GetAttr(
     success = true;
   } else if (!self->IsInstance<DictAttrsNode>()) {
     VisitAttrs(self, &getter);
-    success = getter.found_ref_object || ret.type_code() != kNull;
+    success = getter.found_ref_object || ret.type_code() != kTVMNullptr;
   } else {
     // specially handle dict attr
     DictAttrsNode* dnode = static_cast<DictAttrsNode*>(self);
@@ -135,7 +139,7 @@ class AttrDir : public AttrVisitor {
   void Visit(const char* key, void** value) final {
     names->push_back(key);
   }
-  void Visit(const char* key, Type* value) final {
+  void Visit(const char* key, DataType* value) final {
     names->push_back(key);
   }
   void Visit(const char* key, std::string* value) final {
@@ -174,13 +178,13 @@ ReflectionVTable* ReflectionVTable::Global() {
 
 ObjectPtr<Object>
 ReflectionVTable::CreateInitObject(const std::string& type_key,
-                                   const std::string& global_key) const {
+                                   const std::string& repr_bytes) const {
   uint32_t tindex = Object::TypeKey2Index(type_key);
-  if (tindex >= fvisit_attrs_.size() || fvisit_attrs_[tindex] == nullptr) {
+  if (tindex >= fcreate_.size() || fcreate_[tindex] == nullptr) {
     LOG(FATAL) << "TypeError: " << type_key
                << " is not registered via TVM_REGISTER_NODE_TYPE";
   }
-  return fcreate_[tindex](global_key);
+  return fcreate_[tindex](repr_bytes);
 }
 
 class NodeAttrSetter : public AttrVisitor {
@@ -254,13 +258,13 @@ void InitNodeByPackedArgs(Object* n, const TVMArgs& args) {
 
 // Expose to FFI APIs.
 void NodeGetAttr(TVMArgs args, TVMRetValue* ret) {
-  CHECK_EQ(args[0].type_code(), kObjectHandle);
+  CHECK_EQ(args[0].type_code(), kTVMObjectHandle);
   Object* self = static_cast<Object*>(args[0].value().v_handle);
   *ret = ReflectionVTable::Global()->GetAttr(self, args[1]);
 }
 
 void NodeListAttrNames(TVMArgs args, TVMRetValue* ret) {
-  CHECK_EQ(args[0].type_code(), kObjectHandle);
+  CHECK_EQ(args[0].type_code(), kTVMObjectHandle);
   Object* self = static_cast<Object*>(args[0].value().v_handle);
 
   auto names = std::make_shared<std::vector<std::string> >(
@@ -294,13 +298,12 @@ void MakeNode(const TVMArgs& args, TVMRetValue* rv) {
 }
 
 
-TVM_REGISTER_GLOBAL("_NodeGetAttr")
+TVM_REGISTER_GLOBAL("node.NodeGetAttr")
 .set_body(NodeGetAttr);
 
-TVM_REGISTER_GLOBAL("_NodeListAttrNames")
+TVM_REGISTER_GLOBAL("node.NodeListAttrNames")
 .set_body(NodeListAttrNames);
 
-TVM_REGISTER_GLOBAL("make._Node")
+TVM_REGISTER_GLOBAL("node.MakeNode")
 .set_body(MakeNode);
-
 }  // namespace tvm

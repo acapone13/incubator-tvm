@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 """Common system utilities"""
-from __future__ import absolute_import as _abs
+import atexit
 import os
 import tempfile
 import shutil
@@ -24,27 +24,46 @@ try:
 except ImportError:
     fcntl = None
 
-
 class TempDirectory(object):
     """Helper object to manage temp directory during testing.
 
     Automatically removes the directory when it went out of scope.
     """
+
+    TEMPDIRS = set()
+    @classmethod
+    def remove_tempdirs(cls):
+        temp_dirs = getattr(cls, 'TEMPDIRS', None)
+        if temp_dirs is None:
+            return
+
+        for path in temp_dirs:
+            shutil.rmtree(path, ignore_errors=True)
+
+        cls.TEMPDIRS = None
+
     def __init__(self, custom_path=None):
         if custom_path:
             os.mkdir(custom_path)
             self.temp_dir = custom_path
         else:
             self.temp_dir = tempfile.mkdtemp()
-        self._rmtree = shutil.rmtree
+
+        self.TEMPDIRS.add(self.temp_dir)
 
     def remove(self):
         """Remote the tmp dir"""
         if self.temp_dir:
-            self._rmtree(self.temp_dir, ignore_errors=True)
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+            self.TEMPDIRS.remove(self.temp_dir)
             self.temp_dir = None
 
     def __del__(self):
+        temp_dirs = getattr(self, 'TEMPDIRS', None)
+        if temp_dirs is None:
+            # Do nothing if the atexit hook has already run.
+            return
+
         self.remove()
 
     def relpath(self, name):
@@ -71,6 +90,9 @@ class TempDirectory(object):
             The content of directory
         """
         return os.listdir(self.temp_dir)
+
+
+atexit.register(TempDirectory.remove_tempdirs)
 
 
 def tempdir(custom_path=None):
@@ -167,35 +189,3 @@ def which(exec_name):
         if os.path.isfile(full_path) and os.access(full_path, os.X_OK):
             return full_path
     return None
-
-def get_lower_ir(s):
-    """Get lower ir code of a schedule.
-    This is useful for debug, since you don't have to find all inputs/outputs
-    for a schedule in a fused subgraph.
-
-    Parameters
-    ----------
-    s: Schedule
-
-    Returns
-    -------
-    ir: str
-        The lower ir
-    """
-    from .. import tensor
-    from ..build_module import lower
-
-    outputs = s.outputs
-
-    inputs = []
-    def find_all(op):
-        if isinstance(op, tensor.PlaceholderOp):
-            inputs.append(op.output(0))
-        else:
-            for x in op.input_tensors:
-                find_all(x.op)
-
-    for out in outputs:
-        find_all(out)
-
-    return lower(s, inputs, simple_mode=True)

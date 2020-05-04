@@ -24,12 +24,39 @@
 #ifndef TVM_RELAY_ATTRS_MEMORY_H_
 #define TVM_RELAY_ATTRS_MEMORY_H_
 
-#include <tvm/attrs.h>
+#include <tvm/ir/attrs.h>
 #include <tvm/relay/expr.h>
 #include <string>
+#include <vector>
 
 namespace tvm {
 namespace relay {
+
+std::vector<TensorType> FlattenTupleType(const Type& type);
+std::vector<Expr> FromTupleType(const Type& type, const Expr& expr);
+Expr ToTupleType(const Type& t, const Array<Expr>& exprs);
+
+/*!
+ * \brief Options for allocating storage.
+ */
+struct AllocStorageAttrs : public tvm::AttrsNode<AllocStorageAttrs> {
+  DataType dtype;
+  int device_id;
+  int device_type;
+
+  TVM_DECLARE_ATTRS(AllocStorageAttrs, "relay.attrs.AllocStorageAttrs") {
+    TVM_ATTR_FIELD(dtype)
+      .describe(
+         "The dtype of the tensor to allocate.")
+      .set_default(DataType::Float(32, 1));
+    TVM_ATTR_FIELD(device_id)
+      .describe(
+        "The device id on which to allocate memory.");
+    TVM_ATTR_FIELD(device_type)
+      .describe(
+        "The device type on which to allocate memory.");
+  }
+};
 
 /*!
  * \brief Options for allocating tensors.
@@ -43,7 +70,7 @@ struct AllocTensorAttrs : public tvm::AttrsNode<AllocTensorAttrs> {
     TVM_ATTR_FIELD(dtype)
       .describe(
          "The dtype of the tensor to allocate.")
-      .set_default(Float(32, 1));
+      .set_default(DataType::Float(32, 1));
     TVM_ATTR_FIELD(const_shape)
       .describe(
          "The shape of constant used to aid in type inference.");

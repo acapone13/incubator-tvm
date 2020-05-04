@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 """TF: Tensorflow parser"""
-from __future__ import absolute_import as _abs
-from __future__ import print_function
+# pylint: disable=import-outside-toplevel, assignment-from-no-return
+
 import os
 from tvm.contrib import util
 
@@ -73,7 +73,7 @@ class TFParser(object):
     def _get_output_names(self):
         """Return the concatenated output names"""
         try:
-            import tensorflow as tf
+            import tensorflow.compat.v1 as tf
         except ImportError:
             raise ImportError(
                 "InputConfiguration: Unable to import tensorflow which is "

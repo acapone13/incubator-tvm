@@ -132,7 +132,7 @@ set(USE_BLAS none)
 # set(USE_MKL_PATH <path to venv or site-packages directory>) if using `pip install mkl`
 set(USE_MKL_PATH none)
 
-# Whether use MKLDNN library
+# Whether use MKLDNN library, choices: ON, OFF, path to mkldnn library
 set(USE_MKLDNN OFF)
 
 # Whether use OpenMP thread pool, choices: gnu, intel
@@ -148,11 +148,20 @@ set(USE_NNPACK OFF)
 # Possible values:
 # - ON: enable tflite with cmake's find search
 # - OFF: disable tflite
-# - /path/to/libtensorflow-lite.a: use specific path to tensorflow lite library 
+# - /path/to/libtensorflow-lite.a: use specific path to tensorflow lite library
 set(USE_TFLITE OFF)
 
 # /path/to/tensorflow: tensorflow root path when use tflite library
 set(USE_TENSORFLOW_PATH none)
+
+# Required for full builds with TFLite. Not needed for runtime with TFLite.
+# /path/to/flatbuffers: flatbuffers root path when using tflite library
+set(USE_FLATBUFFERS_PATH none)
+
+# Possible values:
+# - OFF: disable tflite support for edgetpu
+# - /path/to/edgetpu: use specific path to edgetpu library
+set(USE_EDGETPU OFF)
 
 # Whether use CuDNN
 set(USE_CUDNN OFF)
@@ -186,13 +195,23 @@ set(USE_ANTLR OFF)
 set(USE_RELAY_DEBUG OFF)
 
 # Whether to build fast VTA simulator driver
-set(USE_VTA_FSIM ON)
+set(USE_VTA_FSIM OFF)
 
 # Whether to build cycle-accurate VTA simulator driver
-set(USE_VTA_TSIM ON)
+set(USE_VTA_TSIM OFF)
 
 # Whether to build VTA FPGA driver (device side only)
 set(USE_VTA_FPGA OFF)
 
 # Whether to build the example external runtime module
 set(USE_EXAMPLE_EXT_RUNTIME OFF)
+
+# Whether use Thrust
+set(USE_THRUST OFF)
+
+# Whether to build the TensorFlow TVMDSOOp module
+set(USE_TF_TVMDSOOP OFF)
+
+# Whether to use hexagon device
+set(USE_HEXAGON_DEVICE OFF)
+set(USE_HEXAGON_SDK /path/to/sdk)

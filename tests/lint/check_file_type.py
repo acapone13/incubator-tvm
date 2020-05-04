@@ -42,6 +42,7 @@ ALLOW_EXTENSION = {
     "pxi",
     "pyd",
     "pyx",
+    "cu",
     # relay text format
     "rly",
     # configurations
@@ -72,7 +73,9 @@ ALLOW_EXTENSION = {
     "sdc",
     # generated parser
     "interp",
-    "tokens"
+    "tokens",
+    # interface definition
+    "idl",
     }
 
 # List of file names allowed
@@ -89,20 +92,21 @@ ALLOW_FILE_NAME = {
     ".gitmodules",
     "CODEOWNERS",
     ".scalafmt.conf",
+    "Cargo.lock",
+    "with_the_same_user",
    }
 
 # List of specific files allowed in relpath to <proj_root>
 ALLOW_SPECIFIC_FILE = {
-    "docker/with_the_same_user",
     "LICENSE",
     "NOTICE",
     "KEYS",
     "DISCLAIMER",
     "Jenkinsfile",
-    # sgx file
-    "apps/sgx/enclave/sgx-deps.diff",
+    # cargo config
+    "rust/runtime/tests/test_wasm32/.cargo/config",
+    "apps/sgx/.cargo/config",
     # html for demo purposes
-    "nnvm/tutorials/web/resnet.html",
     "tests/webgl/test_static_webgl_library.html",
     "web/example_rpc.html",
     # images are normally not allowed

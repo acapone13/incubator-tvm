@@ -89,9 +89,9 @@ ${DOCKER_BINARY} run --rm --pid=host\
     -e "CI_BUILD_GROUP=$(id -g -n)" \
     -e "CI_BUILD_GID=$(id -g)" \
     -e "PYTHONPATH=python:topi/python"\
+    -e "CI_PYTEST_ADD_OPTIONS=$CI_PYTEST_ADD_OPTIONS" \
     ${CUDA_ENV}\
     ${CI_DOCKER_EXTRA_PARAMS[@]} \
     ${DOCKER_IMAGE_NAME}\
     bash --login /docker/with_the_same_user \
     ${COMMAND[@]}
-
