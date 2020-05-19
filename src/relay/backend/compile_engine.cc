@@ -45,6 +45,7 @@
 #include <utility>
 #include <vector>
 
+#include "../transforms/pass_util.h"
 #include "utils.h"
 
 namespace tvm {
@@ -69,27 +70,6 @@ CCacheKey::CCacheKey(Function source_func, Target target) {
   n->target = std::move(target);
   data_ = std::move(n);
 }
-
-struct IsDynamicVisitor : public TypeVisitor {
-  bool is_dyn{false};
-  void VisitType_(const TensorTypeNode* tt) {
-    for (auto dim : tt->shape) {
-      if (dim.as<Any>()) {
-        is_dyn = true;
-        break;
-      }
-    }
-  }
-};
-
-bool IsDynamic(const Type& ty) {
-  IsDynamicVisitor v;
-  v.VisitType(ty);
-  return v.is_dyn;
-}
-
-// TODO(@jroesch): MOVE ME
-TVM_REGISTER_GLOBAL("relay.ir.IsDynamic").set_body_typed(IsDynamic);
 
 Array<IndexExpr> GetShape(const Array<IndexExpr>& shape) {
   // for now, we always use int32 shape when possible
@@ -211,7 +191,7 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
   }
 
   Array<te::Tensor> VisitExpr_(const CallNode* call_node) final {
-    static auto fpattern = Op::GetAttr<TOpPattern>("TOpPattern");
+    static auto fpattern = Op::GetAttrMap<TOpPattern>("TOpPattern");
     static auto flower_call = tvm::runtime::Registry::Get("relay.backend.lower_call");
     CHECK(flower_call) << "relay.backend.lower_call is not registered.";
 
@@ -474,8 +454,8 @@ class MakeShapeFunc : public backend::MemoizedExprTranslator<Array<te::Tensor>> 
   }
 
   Array<te::Tensor> VisitExpr_(const CallNode* call_node) final {
-    static auto fshape_func = Op::GetAttr<FShapeFunc>("FShapeFunc");
-    static auto tshape_data_dependant = Op::GetAttr<TShapeDataDependant>("TShapeDataDependant");
+    static auto fshape_func = Op::GetAttrMap<FShapeFunc>("FShapeFunc");
+    static auto tshape_data_dependant = Op::GetAttrMap<TShapeDataDependant>("TShapeDataDependant");
     CHECK(call_node->op.as<OpNode>()) << "Primitive function only allows call into primitive ops";
     Op op = Downcast<Op>(call_node->op);
     CHECK(data_dependants_.empty() || !data_dependants_.back())
@@ -485,7 +465,7 @@ class MakeShapeFunc : public backend::MemoizedExprTranslator<Array<te::Tensor>> 
     CHECK_GT(tshape_data_dependant.count(op), 0)
         << "Internal error, cannot find TShapeDataDependant for " << op->name;
 
-    data_dependants_.push_back(tshape_data_dependant[op]);
+    data_dependants_.push_back(IsDataDependant(call_node));
     // Visit all inputs
     Array<te::Tensor> inputs;
     int count_tuple = 0;
@@ -545,6 +525,13 @@ class MakeShapeFunc : public backend::MemoizedExprTranslator<Array<te::Tensor>> 
     return fields;
   }
 
+  Array<te::Tensor> VisitExpr_(const TupleGetItemNode* op) final {
+    Array<te::Tensor> input_shapes = VisitExpr(op->tuple);
+    Array<te::Tensor> out;
+    out.push_back(input_shapes[op->index]);
+    return out;
+  }
+
  private:
   /*! \brief String stream for function name */
   std::ostringstream readable_name_stream_;
@@ -600,7 +587,10 @@ class CompileEngineImpl : public CompileEngineNode {
         auto symbol_name = src_func->GetAttr<String>(tvm::attr::kGlobalSymbol);
         CHECK(symbol_name.defined()) << "No external symbol is set for:\n"
                                      << AsText(src_func, false);
-        auto gv = GlobalVar(std::string(symbol_name.value()));
+        auto gv = GlobalVar(symbol_name.value());
+        // No need to keep compiler attribute at this point, functions have been
+        // extracted for specific codegen.
+        src_func = WithAttr(std::move(src_func), attr::kCompiler, NullValue<ObjectRef>());
         ext_mods[code_gen_name]->Add(gv, src_func);
         cached_ext_funcs.push_back(it.first);
       }

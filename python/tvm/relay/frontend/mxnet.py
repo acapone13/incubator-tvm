@@ -789,6 +789,19 @@ def _mx_l2_normalize(inputs, attrs):
     return _op.nn.l2_normalize(inputs[0], **new_attrs)
 
 
+def _mx_softsign(inputs, attrs):
+    return inputs[0] / (_expr.const(1.0) + _op.abs(inputs[0]))
+
+
+def _mx_hard_sigmoid(inputs, attrs):
+    x = (_expr.const(0.2) * inputs[0]) + _expr.const(0.5)
+    return _op.clip(x, a_min=0.0, a_max=1.0)
+
+
+def _mx_reciprocal(inputs, attrs):
+    return _expr.const(1.0) /inputs[0]
+
+
 def _mx_shape_array(inputs, attrs):
     assert len(inputs) == 1
     if attrs.get_int("lhs_begin", None) is not None:
@@ -1742,23 +1755,28 @@ def _mx_broadcast_logical(logical_op):
 # Note: due to attribute conversion constraint
 # ops in the identity set must be attribute free
 _identity_list = [
+    "abs",
     "log",
     "exp",
     "erf",
     "sqrt",
     "floor",
     "ceil",
+    "round",
+    "sign",
     "sigmoid",
-    "tanh",
     "negative",
     "reshape_like",
     "zeros_like",
     "ones_like",
     "where",
     "gather_nd",
-    "tan",
     "cos",
-    "sin"
+    "cosh",
+    "sin",
+    "sinh",
+    "tan",
+    "tanh",
 ]
 
 _convert_map = {
@@ -1774,7 +1792,12 @@ _convert_map = {
     "broadcast_maximum"      : _rename(_op.maximum),
     "broadcast_minimum"      : _rename(_op.minimum),
     "broadcast_power"        : _rename(_op.power),
+    "arccos"                 : _rename(_op.acos),
+    "arcsin"                 : _rename(_op.asin),
     "arctan"                 : _rename(_op.atan),
+    "arccosh"                : _rename(_op.acosh),
+    "arcsinh"                : _rename(_op.asinh),
+    "arctanh"                : _rename(_op.atanh),
     "broadcast_equal"        : _mx_compare(_op.equal, _rename),
     "broadcast_not_equal"    : _mx_compare(_op.not_equal, _rename),
     "broadcast_greater"      : _mx_compare(_op.greater, _rename),
@@ -1849,6 +1872,9 @@ _convert_map = {
     "softmax"       : _softmax_op(_op.nn.softmax),
     "log_softmax"   : _softmax_op(_op.nn.log_softmax),
     "Softmax"       : _softmax_op(_op.nn.softmax),
+    "softsign"      : _mx_softsign,
+    "hard_sigmoid"  : _mx_hard_sigmoid,
+    "reciprocal"    : _mx_reciprocal,
     # per op specialization
     "Reshape"       : _reshape,
     "reshape"       : _reshape,

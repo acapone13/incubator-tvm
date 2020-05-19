@@ -58,7 +58,7 @@ using Sequential = tvm::transform::Sequential;
  */
 TVM_DLL Pass CreateFunctionPass(
     const runtime::TypedPackedFunc<Function(Function, IRModule, PassContext)>& pass_func,
-    int opt_level, const std::string& name, const tvm::Array<runtime::String>& required);
+    int opt_level, const String& name, const tvm::Array<runtime::String>& required);
 
 /*! \brief Remove expressions which does not effect the program result.
  *
@@ -281,10 +281,12 @@ TVM_DLL Pass AlterOpLayout();
  * layouts for conv2d ops for now. Most of the other operators try to adapt to their input layout
  * using the InferCorrectLayout infrastructure.
  *
- * \param desired_layout The desired layout.
+ * \param desired_layouts Specify mapping of op_name to array of desired layouts for each input.
+ *                        For example: Map("nn.conv2d", Array("NHWC", "OHWI")),
+ *                        this specifies the desired layout for data then kernel for nn.conv2d.
  * \return The pass.
  */
-TVM_DLL Pass ConvertLayout(const std::string& desired_layout);
+TVM_DLL Pass ConvertLayout(const Map<std::string, Array<String>>& desired_layouts);
 
 /*!
  * \brief Legalizes an expr with another expression.
@@ -296,7 +298,7 @@ TVM_DLL Pass ConvertLayout(const std::string& desired_layout);
  *
  * \return The pass.
  */
-TVM_DLL Pass Legalize(const std::string& legalize_map_attr_name = "FTVMLegalize");
+TVM_DLL Pass Legalize(const String& legalize_map_attr_name = "FTVMLegalize");
 
 /*!
  * \brief Canonicalize cast expressions to make operator fusion more efficient.
@@ -385,7 +387,7 @@ TVM_DLL Function InferType(const Function& f, const IRModule& mod, const GlobalV
  *                           an Expr consumed by multiple callers.
  * \return The rewritten expression.
  */
-TVM_DLL Expr ForwardRewrite(const Expr& expr, const std::string& rewrite_map_attr_name,
+TVM_DLL Expr ForwardRewrite(const Expr& expr, const String& rewrite_map_attr_name,
                             std::function<ObjectRef(const Call&)> fcontext = nullptr,
                             std::function<Expr(const Expr&)> fmulti_ref_trigger = nullptr);
 
