@@ -23,11 +23,11 @@
 #include "storage_access.h"
 
 #include <tvm/target/target_info.h>
+#include <tvm/tir/op.h>
 
 #include <string>
 #include <utility>
 
-#include "../../arith/compute_expr.h"
 #include "ir_util.h"
 
 namespace tvm {
@@ -92,7 +92,7 @@ void StorageAccessVisitor::VisitStmt_(const EvaluateNode* op) {
 void StorageAccessVisitor::VisitStmt_(const AttrStmtNode* op) {
   if (op->attr_key == attr::storage_scope) {
     const VarNode* buf = op->node.as<VarNode>();
-    storage_scope_[buf] = StorageScope::make(op->value.as<StringImmNode>()->value);
+    storage_scope_[buf] = StorageScope::Create(op->value.as<StringImmNode>()->value);
     StmtExprVisitor::VisitStmt_(op);
   } else if (op->attr_key == attr::double_buffer_write) {
     CHECK(double_buffer_write_ == nullptr);
@@ -116,7 +116,7 @@ void StorageAccessVisitor::VisitStmt_(const AttrStmtNode* op) {
     IterVar iv = Downcast<IterVar>(op->node);
     env_threads_.push_back(iv);
     StmtExprVisitor::VisitStmt_(op);
-    env_threads_.CopyOnWrite()->data.pop_back();
+    env_threads_.pop_back();
   } else if (op->attr_key == attr::thread_extent) {
     IterVar iv = Downcast<IterVar>(op->node);
     env_threads_.push_back(iv);
@@ -131,7 +131,7 @@ void StorageAccessVisitor::VisitStmt_(const AttrStmtNode* op) {
     } else {
       StmtExprVisitor::VisitStmt_(op);
     }
-    env_threads_.CopyOnWrite()->data.pop_back();
+    env_threads_.pop_back();
   } else {
     StmtExprVisitor::VisitStmt_(op);
   }
@@ -215,11 +215,11 @@ void StorageAccessVisitor::VisitExpr_(const CallNode* op) {
     CHECK(allow_append_);
     const std::string& s = op->args[0].as<StringImmNode>()->value;
     if (s != "warp") {
-      StorageScope scope = StorageScope::make(s);
+      StorageScope scope = StorageScope::Create(s);
       AccessEntry e;
       e.threads = env_threads();
       e.type = kSync;
-      e.scope = StorageScope::make(s);
+      e.scope = StorageScope::Create(s);
       curr_stmt_.access.emplace_back(std::move(e));
     }
   } else {

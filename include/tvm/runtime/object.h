@@ -64,6 +64,8 @@ struct TypeIndex {
     kRuntimeNDArray = 2,
     /*! \brief runtime::String. */
     kRuntimeString = 3,
+    /*! \brief runtime::Array. */
+    kRuntimeArray = 4,
     // static assignments that may subject to change.
     kRuntimeClosure,
     kRuntimeADT,
@@ -86,7 +88,7 @@ struct TypeIndex {
  *       The unique string identifier of tyep type.
  * - _type_final:
  *       Whether the type is terminal type(there is no subclass of the type in the object system).
- *       This field is automatically set by marco TVM_DECLARE_FINAL_OBJECT_INFO
+ *       This field is automatically set by macro TVM_DECLARE_FINAL_OBJECT_INFO
  *       It is still OK to sub-class a terminal object type T and construct it using make_object.
  *       But IsInstance check will only show that the object type is T(instead of the sub-class).
  *
@@ -475,7 +477,7 @@ class ObjectPtr {
   // friend classes
   friend class Object;
   friend class ObjectRef;
-  friend struct ObjectHash;
+  friend struct ObjectPtrHash;
   template <typename>
   friend class ObjectPtr;
   template <typename>
@@ -585,7 +587,7 @@ class ObjectRef {
     return ObjectPtr<ObjectType>(ref.data_.data_);
   }
   // friend classes.
-  friend struct ObjectHash;
+  friend struct ObjectPtrHash;
   friend class TVMRetValue;
   friend class TVMArgsSetter;
   template <typename SubRef, typename BaseRef>
@@ -604,7 +606,7 @@ template <typename BaseType, typename ObjectType>
 inline ObjectPtr<BaseType> GetObjectPtr(ObjectType* ptr);
 
 /*! \brief ObjectRef hash functor */
-struct ObjectHash {
+struct ObjectPtrHash {
   size_t operator()(const ObjectRef& a) const { return operator()(a.data_); }
 
   template <typename T>
@@ -614,7 +616,7 @@ struct ObjectHash {
 };
 
 /*! \brief ObjectRef equal functor */
-struct ObjectEqual {
+struct ObjectPtrEqual {
   bool operator()(const ObjectRef& a, const ObjectRef& b) const { return a.same_as(b); }
 
   template <typename T>
@@ -698,6 +700,7 @@ struct ObjectEqual {
   explicit TypeName(::tvm::runtime::ObjectPtr<::tvm::runtime::Object> n) : ParentType(n) {}    \
   TVM_DEFINE_DEFAULT_COPY_MOVE_AND_ASSIGN(TypeName);                                           \
   const ObjectName* operator->() const { return static_cast<const ObjectName*>(data_.get()); } \
+  const ObjectName* get() const { return operator->(); }                                       \
   using ContainerType = ObjectName;
 
 /*
@@ -711,6 +714,7 @@ struct ObjectEqual {
   explicit TypeName(::tvm::runtime::ObjectPtr<::tvm::runtime::Object> n) : ParentType(n) {}    \
   TVM_DEFINE_DEFAULT_COPY_MOVE_AND_ASSIGN(TypeName);                                           \
   const ObjectName* operator->() const { return static_cast<const ObjectName*>(data_.get()); } \
+  const ObjectName* get() const { return operator->(); }                                       \
   static constexpr bool _type_is_nullable = false;                                             \
   using ContainerType = ObjectName;
 

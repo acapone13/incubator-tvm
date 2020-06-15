@@ -28,9 +28,11 @@
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/MCJIT.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/SourceMgr.h>
+#include <tvm/runtime/container.h>
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/IR/IntrinsicsAMDGPU.h>
 #include <llvm/IR/IntrinsicsARM.h>
@@ -106,6 +108,12 @@ std::unique_ptr<llvm::TargetMachine> GetLLVMTargetMachine(const std::string& tar
                                                           bool allow_null = false);
 
 }  // namespace codegen
+}  // namespace tvm
+
+namespace tvm {
+namespace runtime {
+inline String::operator llvm::StringRef() const { return llvm::StringRef(get()->data, size()); }
+}  // namespace runtime
 }  // namespace tvm
 #endif  // TVM_LLVM_VERSION
 #endif  // TVM_TARGET_LLVM_LLVM_COMMON_H_

@@ -20,6 +20,13 @@ set -e
 set -u
 
 source tests/scripts/setup-pytest-env.sh
+
+cleanup()
+{
+    rm -rf /tmp/$$.log.txt
+}
+trap cleanup 0
+
 # cleanup old states
 rm -rf docs/_build
 mkdir -p docs/_build/html
@@ -36,7 +43,11 @@ find . -type f -path "*.pyc" | xargs rm -f
 make cython3
 
 cd docs
-PYTHONPATH=`pwd`/../python make html
+PYTHONPATH=`pwd`/../python make html |& tee /tmp/$$.log.txt
+if grep -E "failed to execute" < /tmp/$$.log.txt; then
+    echo "Some of sphinx-gallery item example failed to execute."
+    exit 1
+fi
 cd ..
 
 # C++ doc
@@ -56,12 +67,15 @@ cd ..
 rm -rf _docs
 mv docs/_build/html _docs
 rm -f _docs/.buildinfo
-mv docs/doxygen/html _docs/doxygen
-mv jvm/core/target/site/apidocs _docs/javadoc
-mv web/dist/docs _docs/typedoc
+mkdir -p _docs/api
+mv docs/doxygen/html _docs/api/doxygen
+mv jvm/core/target/site/apidocs _docs/api/javadoc
+mv web/dist/docs _docs/api/typedoc
 
 echo "Start creating the docs tarball.."
 # make the tarball
 tar -C _docs -czf docs.tgz .
 echo "Finish creating the docs tarball"
 du -h docs.tgz
+
+echo "Finish everything"

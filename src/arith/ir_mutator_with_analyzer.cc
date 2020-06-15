@@ -55,21 +55,28 @@ Stmt IRMutatorWithAnalyzer::VisitStmt_(const LetStmtNode* op) {
 
 Stmt IRMutatorWithAnalyzer::VisitStmt_(const IfThenElseNode* op) {
   PrimExpr condition = this->VisitExpr(op->condition);
+  PrimExpr real_condition = condition;
+  if (auto call = condition.as<CallNode>()) {
+    if (call->is_intrinsic(CallNode::likely)) {
+      real_condition = call->args[0];
+    }
+  }
+
   Stmt then_case, else_case;
   {
-    With<ConstraintContext> ctx(analyzer_, condition);
+    With<ConstraintContext> ctx(analyzer_, real_condition);
     then_case = this->VisitStmt(op->then_case);
   }
   if (op->else_case.defined()) {
-    With<ConstraintContext> ctx(analyzer_, analyzer_->rewrite_simplify(NotNode::make(condition)));
+    With<ConstraintContext> ctx(analyzer_, analyzer_->rewrite_simplify(Not(real_condition)));
     else_case = this->VisitStmt(op->else_case);
   }
-  if (is_one(condition)) return then_case;
-  if (is_zero(condition)) {
+  if (is_one(real_condition)) return then_case;
+  if (is_zero(real_condition)) {
     if (else_case.defined()) {
       return else_case;
     }
-    return EvaluateNode::make(0);
+    return Evaluate(0);
   }
 
   if (condition.same_as(op->condition) && then_case.same_as(op->then_case) &&
@@ -123,8 +130,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const CallNode* op) {
       true_value = this->VisitExpr(op->args[1]);
     }
     {
-      With<ConstraintContext> constraint(analyzer_,
-                                         analyzer_->rewrite_simplify(NotNode::make(cond)));
+      With<ConstraintContext> constraint(analyzer_, analyzer_->rewrite_simplify(Not(cond)));
       false_value = this->VisitExpr(op->args[2]);
     }
     if (is_zero(cond)) {
@@ -137,7 +143,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const CallNode* op) {
         false_value.same_as(op->args[2])) {
       return GetRef<PrimExpr>(op);
     } else {
-      return CallNode::make(op->dtype, op->name, {cond, true_value, false_value}, op->call_type);
+      return Call(op->dtype, op->name, {cond, true_value, false_value}, op->call_type);
     }
   }
   return StmtExprMutator::VisitExpr_(op);
@@ -154,7 +160,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const LetNode* op) {
   if (value.same_as(op->value) && body.same_as(op->body)) {
     return GetRef<PrimExpr>(op);
   } else {
-    return LetNode::make(op->var, value, body);
+    return Let(op->var, value, body);
   }
 }
 
@@ -166,7 +172,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const SelectNode* op) {
     true_value = VisitExpr(op->true_value);
   }
   {
-    With<ConstraintContext> constraint(analyzer_, analyzer_->rewrite_simplify(NotNode::make(cond)));
+    With<ConstraintContext> constraint(analyzer_, analyzer_->rewrite_simplify(Not(cond)));
     false_value = VisitExpr(op->false_value);
   }
   if (is_zero(cond)) {
@@ -180,7 +186,7 @@ PrimExpr IRMutatorWithAnalyzer::VisitExpr_(const SelectNode* op) {
       false_value.same_as(op->false_value)) {
     return GetRef<PrimExpr>(op);
   } else {
-    return SelectNode::make(cond, true_value, false_value);
+    return Select(cond, true_value, false_value);
   }
 }
 

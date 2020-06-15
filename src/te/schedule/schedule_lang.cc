@@ -37,17 +37,17 @@ namespace te {
 template <typename T>
 size_t FindNodeRef(ArrayNode* array_node, const T& v) {
   const Object* n = v.get();
-  for (size_t i = 0; i < array_node->data.size(); ++i) {
-    if (array_node->data[i].get() == n) return i;
+  for (size_t i = 0; i < array_node->size(); ++i) {
+    if (array_node->at(i).get() == n) return i;
   }
-  return array_node->data.size();
+  return array_node->size();
 }
 
 size_t FindLeafVar(ArrayNode* all_vars, ArrayNode* leaf_vars, const IterVar& v) {
   size_t pos = FindNodeRef(leaf_vars, v);
-  if (pos < leaf_vars->data.size()) return pos;
+  if (pos < leaf_vars->size()) return pos;
 
-  if (FindNodeRef(all_vars, v) < all_vars->data.size()) {
+  if (FindNodeRef(all_vars, v) < all_vars->size()) {
     LOG(FATAL) << "Operate on iter var " << v << "that has already been split";
   } else {
     LOG(FATAL) << "Operate on iter var " << v << "that is not part of the schedule";
@@ -55,30 +55,28 @@ size_t FindLeafVar(ArrayNode* all_vars, ArrayNode* leaf_vars, const IterVar& v) 
   return 0;
 }
 
-void Split(StageNode* self, IterVar parent, PrimExpr factor, PrimExpr nparts, IterVar* p_outer,
-           IterVar* p_inner) {
+void SplitHelper(StageNode* self, IterVar parent, PrimExpr factor, PrimExpr nparts,
+                 IterVar* p_outer, IterVar* p_inner) {
   // Check if split is valid.
   CHECK(parent->iter_type == kDataPar || parent->iter_type == kCommReduce ||
         parent->iter_type == kOrdered)
       << "Cannot split on " << IterVarType2String(parent->iter_type);
-  IterVar outer =
-      IterVarNode::make(Range(), parent->var.copy_with_suffix(".outer"), parent->iter_type);
-  IterVar inner =
-      IterVarNode::make(Range(), parent->var.copy_with_suffix(".inner"), parent->iter_type);
+  IterVar outer = IterVar(Range(), parent->var.copy_with_suffix(".outer"), parent->iter_type);
+  IterVar inner = IterVar(Range(), parent->var.copy_with_suffix(".inner"), parent->iter_type);
   *p_outer = outer;
   *p_inner = inner;
   // The splits
-  ArrayNode* all_vars = self->all_iter_vars.CopyOnWrite();
-  ArrayNode* leaf_vars = self->leaf_iter_vars.CopyOnWrite();
-  size_t pos = FindLeafVar(all_vars, leaf_vars, parent);
-  self->relations.push_back(SplitNode::make(parent, outer, inner, factor, nparts));
+  Array<IterVar>& all_vars = self->all_iter_vars;
+  Array<IterVar>& leaf_vars = self->leaf_iter_vars;
+  size_t pos = FindLeafVar(all_vars.GetArrayNode(), leaf_vars.GetArrayNode(), parent);
+  self->relations.push_back(Split(parent, outer, inner, factor, nparts));
   // add vars to all vars
-  all_vars->data.push_back(outer);
-  all_vars->data.push_back(inner);
+  all_vars.push_back(outer);
+  all_vars.push_back(inner);
   // replace the position.
-  leaf_vars->data.erase(leaf_vars->data.begin() + pos);
-  leaf_vars->data.insert(leaf_vars->data.begin() + pos, inner);
-  leaf_vars->data.insert(leaf_vars->data.begin() + pos, outer);
+  leaf_vars.erase(leaf_vars.begin() + pos);
+  leaf_vars.insert(leaf_vars.begin() + pos, inner);
+  leaf_vars.insert(leaf_vars.begin() + pos, outer);
 }
 
 Stage::Stage(Operation op) {
@@ -188,14 +186,14 @@ Stage& Stage::env_threads(Array<IterVar> threads) {
   CHECK(self->op.defined() && self->op.as<ScanOpNode>())
       << "env_threads is only valid for composite ops such as ScanOp";
   CHECK_EQ(self->env_threads.size(), 0U) << "Already set env_threads";
-  ArrayNode* leaf_vars = self->leaf_iter_vars.CopyOnWrite();
-  ArrayNode* all_vars = self->all_iter_vars.CopyOnWrite();
+  Array<IterVar>& leaf_vars = self->leaf_iter_vars;
+  Array<IterVar>& all_vars = self->all_iter_vars;
   std::vector<ObjectRef> temp;
   for (IterVar iv : threads) {
     temp.push_back(iv);
   }
-  leaf_vars->data.insert(leaf_vars->data.begin(), temp.begin(), temp.end());
-  all_vars->data.insert(all_vars->data.end(), temp.begin(), temp.end());
+  leaf_vars.insert(leaf_vars.begin(), temp.begin(), temp.end());
+  all_vars.insert(all_vars.end(), temp.begin(), temp.end());
   self->env_threads = threads;
   return *this;
 }
@@ -208,13 +206,13 @@ Stage& Stage::set_store_predicate(PrimExpr predicate) {
 
 Stage& Stage::split(IterVar parent, PrimExpr factor, IterVar* p_outer,
                     IterVar* p_inner) {  // NOLINT(*)
-  Split(operator->(), parent, factor, PrimExpr(), p_outer, p_inner);
+  SplitHelper(operator->(), parent, factor, PrimExpr(), p_outer, p_inner);
   return *this;
 }
 
 Stage& Stage::split_by_nparts(IterVar parent, PrimExpr nparts, IterVar* p_outer,
                               IterVar* p_inner) {  // NOLINT(*)
-  Split(operator->(), parent, PrimExpr(), nparts, p_outer, p_inner);
+  SplitHelper(operator->(), parent, PrimExpr(), nparts, p_outer, p_inner);
   return *this;
 }
 
@@ -231,24 +229,23 @@ Stage& Stage::fuse(IterVar outer, IterVar inner, IterVar* p_target) {  // NOLINT
   if (inner->iter_type > iter_type) iter_type = inner->iter_type;
   std::string fused_name = outer->var->name_hint + "." + inner->var->name_hint + ".fused";
 
-  IterVar fused = IterVarNode::make(Range(), Var(fused_name, outer->var.dtype()), iter_type);
+  IterVar fused = IterVar(Range(), Var(fused_name, outer->var.dtype()), iter_type);
 
-  ArrayNode* all_vars = self->all_iter_vars.CopyOnWrite();
-  ArrayNode* leaf_vars = self->leaf_iter_vars.CopyOnWrite();
+  Array<IterVar>& all_vars = self->all_iter_vars;
+  Array<IterVar>& leaf_vars = self->leaf_iter_vars;
 
-  size_t pos_inner = FindLeafVar(all_vars, leaf_vars, inner);
-  size_t pos_outer = FindLeafVar(all_vars, leaf_vars, outer);
+  size_t pos_inner = FindLeafVar(all_vars.GetArrayNode(), leaf_vars.GetArrayNode(), inner);
+  size_t pos_outer = FindLeafVar(all_vars.GetArrayNode(), leaf_vars.GetArrayNode(), outer);
   if (pos_inner + 1 == pos_outer) {
     std::swap(outer, inner);
     std::swap(pos_inner, pos_outer);
   }
   CHECK_EQ(pos_inner, pos_outer + 1)
       << "Can only fuse iterations that are consecutive between each other";
-  self->relations.push_back(FuseNode::make(outer, inner, fused));
-  all_vars->data.push_back(fused);
-  leaf_vars->data.erase(leaf_vars->data.begin() + pos_outer,
-                        leaf_vars->data.begin() + pos_inner + 1);
-  leaf_vars->data.insert(leaf_vars->data.begin() + pos_outer, fused);
+  self->relations.push_back(Fuse(outer, inner, fused));
+  all_vars.push_back(fused);
+  leaf_vars.erase(leaf_vars.begin() + pos_outer, leaf_vars.begin() + pos_inner + 1);
+  leaf_vars.insert(leaf_vars.begin() + pos_outer, fused);
   *p_target = fused;
   return *this;
 }
@@ -264,13 +261,13 @@ Stage& Stage::fuse(const Array<IterVar>& axes, IterVar* p_target) {  // NOLINT(*
     StageNode* self = operator->();
     // special handle fuse empty array.
     // insert at the outer most loop
-    IterVar singleton = IterVarNode::make(Range::make_by_min_extent(0, 1),
-                                          Var("singleton", DataType::Int(32)), kDataPar);
-    self->relations.push_back(SingletonNode::make(singleton));
-    ArrayNode* all_vars = self->all_iter_vars.CopyOnWrite();
-    ArrayNode* leaf_vars = self->leaf_iter_vars.CopyOnWrite();
-    all_vars->data.push_back(singleton);
-    leaf_vars->data.insert(leaf_vars->data.begin(), singleton);
+    IterVar singleton =
+        IterVar(Range::make_by_min_extent(0, 1), Var("singleton", DataType::Int(32)), kDataPar);
+    self->relations.push_back(Singleton(singleton));
+    Array<IterVar>& all_vars = self->all_iter_vars;
+    Array<IterVar>& leaf_vars = self->leaf_iter_vars;
+    all_vars.push_back(singleton);
+    leaf_vars.insert(leaf_vars.begin(), singleton);
     *p_target = singleton;
   }
   return *this;
@@ -296,11 +293,11 @@ Stage& Stage::reorder(const Array<IterVar>& order) {  // NOLINT(*)
   }
   std::vector<ObjectRef> temp;
   for (size_t i = 0; i < pos.size(); ++i) {
-    temp.emplace_back(leaf_vars->data[pos[i]]);
+    temp.emplace_back(leaf_vars->at(pos[i]));
   }
   std::sort(pos.begin(), pos.end());
   for (size_t i = 0; i < pos.size(); ++i) {
-    leaf_vars->data[pos[i]] = temp[i];
+    leaf_vars->SetItem(pos[i], temp[i]);
   }
   return *this;
 }
@@ -371,7 +368,7 @@ Stage& Stage::pragma(IterVar var, const std::string& pragma_type,
     this->vectorize(var);
   } else {
     UpdateIterVarAttr(operator->(), var, [pragma_type, pragma_value](IterVarAttrNode* n) {
-      n->pragma_keys.push_back(tir::StringImmNode::make(pragma_type));
+      n->pragma_keys.push_back(tir::StringImm(pragma_type));
       n->pragma_values.push_back(pragma_value);
     });
   }
@@ -423,7 +420,7 @@ Stage CopyStage(const Stage& s) {
 Schedule Schedule::copy() const {
   // map of stages.
   const ScheduleNode* self = operator->();
-  std::unordered_map<Stage, Stage, ObjectHash, ObjectEqual> smap;
+  std::unordered_map<Stage, Stage, ObjectPtrHash, ObjectPtrEqual> smap;
   ObjectPtr<ScheduleNode> n = make_object<ScheduleNode>();
   n->outputs = self->outputs;
   // Copy the stages.
@@ -519,7 +516,7 @@ Stage Schedule::create_group(const Array<Tensor>& outputs, const Array<Tensor>& 
     int count{0};
   };
   // Map of group->touched counter
-  std::unordered_map<Stage, Entry, ObjectHash, ObjectEqual> counter;
+  std::unordered_map<Stage, Entry, ObjectPtrHash, ObjectPtrEqual> counter;
   // The parent group;
   Stage parent_group;
   // Detect common parent and child.
@@ -627,9 +624,9 @@ bool ScheduleNode::Contain(const Operation& op) const {
   return stage_map.find(op) != stage_map.end();
 }
 
-Schedule ScheduleNode::make(Array<Operation> ops) {
+Schedule::Schedule(Array<Operation> ops) {
   auto n = make_object<ScheduleNode>();
-  Schedule sch(n);
+  data_ = n;
   n->outputs = ops;
   auto g = te::CreateReadGraph(n->outputs);
   Array<Operation> post_order = te::PostDFSOrder(n->outputs, g);
@@ -653,7 +650,7 @@ Schedule ScheduleNode::make(Array<Operation> ops) {
         inputs.push_back(t);
       }
       // Create the scan group.
-      Stage scan_group = sch.create_group(scan->update, inputs, false);
+      Stage scan_group = this->create_group(scan->update, inputs, false);
       scan_group->attach_type = kScanUpdate;
       scan_group->attach_stage = stage;
 
@@ -663,39 +660,37 @@ Schedule ScheduleNode::make(Array<Operation> ops) {
       }
     }
   }
-  return sch;
 }
 
-IterVarRelation SplitNode::make(IterVar parent, IterVar outer, IterVar inner, PrimExpr factor,
-                                PrimExpr nparts) {
+Split::Split(IterVar parent, IterVar outer, IterVar inner, PrimExpr factor, PrimExpr nparts) {
   auto n = make_object<SplitNode>();
   n->parent = parent;
   n->outer = outer;
   n->inner = inner;
   n->factor = factor;
   n->nparts = nparts;
-  return IterVarRelation(n);
+  data_ = std::move(n);
 }
 
-IterVarRelation FuseNode::make(IterVar outer, IterVar inner, IterVar fused) {
+Fuse::Fuse(IterVar outer, IterVar inner, IterVar fused) {
   auto n = make_object<FuseNode>();
   n->outer = outer;
   n->inner = inner;
   n->fused = fused;
-  return IterVarRelation(n);
+  data_ = std::move(n);
 }
 
-IterVarRelation RebaseNode::make(IterVar parent, IterVar rebased) {
+Rebase::Rebase(IterVar parent, IterVar rebased) {
   auto n = make_object<RebaseNode>();
   n->parent = parent;
   n->rebased = rebased;
-  return IterVarRelation(n);
+  data_ = std::move(n);
 }
 
-IterVarRelation SingletonNode::make(IterVar iter) {
+Singleton::Singleton(IterVar iter) {
   auto n = make_object<SingletonNode>();
   n->iter = iter;
-  return IterVarRelation(n);
+  data_ = std::move(n);
 }
 
 SpecializedCondition::SpecializedCondition(Array<PrimExpr> conditions) {
