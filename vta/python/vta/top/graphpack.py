@@ -203,7 +203,7 @@ class ExprPack(ExprMutator):
         odtype = _get_tensor_type(call)
         input_types = [arg.checked_type for arg in call.args]
         args = [self.visit(arg) for arg in call.args]
-
+        #print(args[0])
         # Start and stop cases.
         if call.op == self.bitpack_start:
             assert not self.start_pack
@@ -226,7 +226,11 @@ class ExprPack(ExprMutator):
                 data, weight = args
                 data_shape = _to_shape(input_types[0].shape)
                 kernel_shape = _to_shape(input_types[1].shape)
-                channels = call.attrs.channels
+                if isinstance(call.attrs.channels, 
+                              (int, str, tvm.tir.expr.IntImm)):
+                    channels = call.attrs.channels
+                else:
+                    channels = kernel_shape[0]
                 weight, kernel_shape, channels = _weight_shape_match(weight,
                                                                      kernel_shape,
                                                                      channels,

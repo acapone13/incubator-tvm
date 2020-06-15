@@ -85,6 +85,7 @@ class GraphRuntimeCodegen(object):
         param_names = self._list_params_name()
         params = {}
         for key in param_names:
+            key = str(key)
             arr = self._get_param_by_name(key)
             param = empty(arr.shape, dtype=arr.dtype, ctx=arr.ctx)
             arr.copyto(param)

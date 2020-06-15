@@ -90,7 +90,7 @@ pack_dict = {
 # The ``start_pack`` and ``stop_pack`` labels indicate where
 # to start and end the graph packing relay pass: in other words
 # where to start and finish offloading to VTA.
-model = "resnet18_v1"
+model = "resnet18_v2"
 assert model in pack_dict
 
 ######################################################################
