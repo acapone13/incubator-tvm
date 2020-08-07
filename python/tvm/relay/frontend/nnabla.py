@@ -2,9 +2,10 @@
 import numpy as np
 import collections
 import nnabla as nn
-from nnabla.utils.nnp_graph import NnpLoader, FunctionProto, VariableProto
+# from nnabla.utils.nnp_graph import NnpLoader, FunctionProto, VariableProto
 from nnabla.utils import nnabla_pb2
-from nnabla.parameter import get_parameter_or_create, save_parameters, get_parameter_or_create
+from nnabla.utils.converter.nnabla import NnpImporter
+# from nnabla.parameter import get_parameter_or_create, save_parameters, get_parameter_or_create
 import google.protobuf.text_format as text_format 
 import zipfile
 import shutil
@@ -21,9 +22,10 @@ from ... import nd as _nd
 from .. import analysis 
 from .. import expr as _expr
 from .. import function as _function
-from .. import op as _op 
+from .. import op as _op
+from ..expr_functor import ExprFunctor 
 
-from .common import AttrCvt, Renamer
+# from .common import AttrCvt, Renamer
 from .common import get_relay_op, new_var, infer_shape, infer_channels
 from .common import infer_type, get_name
 from .common import infer_value as _infer_value
@@ -46,10 +48,10 @@ __all__ = ['from_nnabla']
 #     TensorProto.INT64: np.int64,
 # }
 
-def load_nnp(nnp_file):
+g = None
+
+def load_nnp(nnp_path):
     """ Add description """
-    def load_nnp(nnp_path):
-    # Load nnp file
     
     return NnpImporter(nnp_path, expad_network=False, executor_index=True).execute()
 
@@ -151,18 +153,38 @@ def _convert_convolution():
         data_layout = "NCHW"
         kernel_layout = "OIHW"
 
+        # Extract information from nnabla node found in convolution_param
+        _stride = tuple(func.convolution_param.stride.dim)
+        _pad_w = func.convolution_param.pad.dim[0]
+        _pad_h = func.convolution_param.pad.dim[1]
+        _pad  = (_pad_w, _pad_h, _pad_w, _pad_h)
+        _dilation = tuple(func.convolution_param.dilation.dim)
+        _group = func.convolution_param.group
+
         conv_out = _op.nn.conv2d(inputs[0],
                                  inputs[1],
-                                 strides=(func.sy, func.sx),
-                                 padding=(func.ph, func.pw, func.ph, func.pw),
-                                 dilation=(func.dy, func.dx),
-                                 groups=func.groups,
+                                 strides=_stride,
+                                 padding=_pad,
+                                 dilation=_dilation,
+                                 groups=_group,
                                  channels=func.inputs[1].shape[0],
                                  kernel_size=func.inputs[1].shape[2:],
                                  data_layout=data_layout,
                                  kernel_layout=kernel_layout,
                                  out_layout="",
                                  out_dtype="")
+
+        """ Alternative Way:
+            out = AttrCvt(
+                op_name=dimension_picker('conv'),
+                transforms={
+                    'kernel_shape': 'kernel_size',
+                    'dilations': ('dilation', 1),
+                    'pads': ('padding', 0),
+                    'group': ('groups', 1)
+                },
+                custom_check=dimension_constraint())(inputs[:2], attr, params)
+        """
         
         use_bias = len(inputs) == 3
 
@@ -196,7 +218,7 @@ def _linear():
     return _impl
 
 # def _convert_softmax():
- 
+
 
 # def _convert_pooling():
 
@@ -206,6 +228,7 @@ def _linear():
 
 # def _convert_flatten():
 
+# def _convert_affine():
 
 # #############################################################################
 # Converter map for NNabla 
@@ -215,25 +238,26 @@ def _linear():
 # 
 
 _convert_map = {
-    'SoftMax'                  : _convert_softmax,
-    'ReLU'                     : _convert_relu,
-    'LeakyReLU'                : _none,
-    'PReLU'                    : _none,
-    'ELU'                      : _none,
+    'SoftMax'                  : _none(), #_convert_softmax,
+    'ReLU'                     : _none(), #_convert_relu,
+    'LeakyReLU'                : _none(),
+    'PReLU'                    : _none(),
+    'ELU'                      : _none(),
 
-    'AveragePooling'           : _convert_pooling,
-    'MaxPooling'               : _convert_pooling,
-    'GlobalAveragePooling2D'   : _none,
-    'GlobalMaxPooling2D'       : _none,
+    'AveragePooling'           : _none(), #_convert_pooling,
+    'MaxPooling'               : _none(), #_convert_pooling,
+    'GlobalAveragePooling2D'   : _none(),
+    'GlobalMaxPooling2D'       : _none(),
     'Convolution'              : _convert_convolution,
-    'Conv2DTranspose'          : _none,
-    'DepthwiseConv2D'          : _none,
+    'Conv2DTranspose'          : _none(),
+    'DepthwiseConv2D'          : _none(),
 
-    'Flatten'                  : _convert_flatten,
-    'Reshape'                  : _convert_reshape,
-    'Concatenate'              : _convert_concat,
-    'BatchNormalization'       : _convert_batchnorm,
-    'Add2'                     : _convert_elemwise
+    'Flatten'                  : _none(), #_convert_flatten,
+    'Reshape'                  : _none(), #_convert_reshape,
+    'Concatenate'              : _none(), #_convert_concat,
+    'BatchNormalization'       : _none(), #_convert_batchnorm,
+    'Add2'                     : _none(), #_convert_elemwise
+    'Affine'                   : _none(),
 }
 
 # #############################################################################
@@ -244,49 +268,19 @@ def get_converter(op):
     """ Convert NNabla operators to Relay Converter """
     return _convert_map[op]
 
-def _check_unsupported_layers():
-    # TODO: Complete with missing layers
-
-# def nnabla_op_to_relay(inexpr, nnabla_layer, outname, etab):
-#     """Convert a NNabla layer to a Relay expression and update the expression table.
-
-#     Parameters
-#     ----------
-#     inexpr : relay.expr.Expr or a list of it
-#         The input Relay expression(s).
-
-#     NNabla_layer : NNabla.layers
-#         The NNabla layer to be converted.
-
-#     outname : str
-#         Name of the output Relay expression.
-
-#     etab : relay.frontend.common.ExprTable
-#         The global expression table to be updated.
-#     """
-#     op_name = # TODO: get function name
-#     if op_name not in _convert_map:
-#         raise tvm.error.OpNotImplemented(
-#             'Operator {} is not supported for frontend Nnabla'.format(op_name))
-#     outs = _convert_map[op_name](inexp, etab)
-#     outs = _as_lists(outs)
-#     for t_idx, out in enumarete(outs):
-#         name = outname + ":" + str(t_idx)
-#         etab.set_expr(name, out)
-
 class NNablaGraph(object):
-    def __init__(self, nnp, batch_size=1, shape, dtype):
+    def __init__(self, nnp, shape, dtype, batch_size=1):
         # NNabla related variables
         self._nnp = nnp.protobuf        # nnabla graph as protobuf object
         self._batch_size = batch_size   # executor batch_size
         self._net = None                # network_name
         self._executor = None
         self._parameters = {}
-        self.var_dict = {}
+        self._var_dict = {}
         self.initializer = {}
         self.inputs = {}
         self.outputs = {}
-        self.nodes_ = {}
+        self.nodes = {}
 
     def _set_network(self):
         if len(self._nnp.executor) != 1:
@@ -306,13 +300,14 @@ class NNablaGraph(object):
         return net
     
     def _set_shape_all(self):
-        bs = self.batch_size
+        assert isinstance(self._batch_size, int)
+        bs = self._batch_size
         if bs < 0:
             bs = self._net._batch_size
         self._batch_size = bs
         # store all variable shape info to use later 
         for v in self._net.variable:
-            self._shape[v.name] = replace_negative_size_with_batch_size(
+            self._var_dict[v.name] = replace_negative_size_with_batch_size(
                 v.shape, bs)
         
         for p in self._nnp.parameter:
@@ -321,12 +316,12 @@ class NNablaGraph(object):
     def _set_variables(self):
         exe = self._executor
         for param in self._nnp.parameter:
-            if param.variable_name in self.var_dict:
+            if param.variable_name in self._var_dict:
                 # Graph initializer
                 self.initializer[param.variable_name] = param 
 
                 # Graph Inputs
-                self.inputs[param.variable] =  param 
+                self.inputs[param.variable_name] =  param 
         
             else:
                 print("Not in: {}".format(param.variable_name))
@@ -346,25 +341,25 @@ class NNablaGraph(object):
     def _set_nodes(self, func):
         """ Convert a function to a node or a group of nodes"""
         for f in self._net.function:
-            node_name = f.type
+            node_name = f.name
             self.nodes[node_name] = f
 
     def create_graph(self):
-        net = self.set_network()
-        self.set_shape_all()
+        net = self._set_network()
+        self._set_shape_all()
         for f in net.function:
-            self.set_nodes(f)
+            self._set_nodes(f)
 
         # Broadcast target buffer
-
-        self.set_variables()
+        self._set_variables()
 
 class Exporter(ExprFunctor):
     """ Add information """
-    def __init__(self, nnp, batch_size=1, shape, dtype):
+    def __init__(self, nnp, shape, dtype, batch_size=1):
         # For creating Graph 
         self._nnp = nnp 
         self._batch_size = batch_size
+        self._graph = NNablaGraph(nnp, shape, dtype, batch_size)
 
         # For Relay convertion
         self._nodes = {}
@@ -387,11 +382,8 @@ class Exporter(ExprFunctor):
         
         return _nd.array(np_array)
     
-    def _parse_dtype(self, func):
-        """ TODO: Create dtype parser to pass the correct datatype to Relay """
-            
-
-    
+    # def _parse_dtype(self, func):
+    #     """ TODO: Create dtype parser to pass the correct datatype to Relay """
     
     def _convert_operator(self, input_data, func):
         """ Convert NNabla operator into Relay Operator
@@ -416,6 +408,7 @@ class Exporter(ExprFunctor):
         sym : tvm.relay.function.Function
             Converted relay function
         """
+        pdb.set_trace()
         op_name = func.type 
         if op_name in _convert_map:
             sym = _convert_map[op_name](input_data, func)
@@ -438,20 +431,27 @@ class Exporter(ExprFunctor):
             A dict of name: tvm.nd.array pairs, used as pretrained weights
         """
         # Create NNabla graph
-        graph = Graph(self._nnp, self._batch_size, self._shape, self._dtype).create_graph()
-        self._shape = graph.var_dict
+        # graph = NNablaGraph(self._nnp, self._shape, self._dtype, self._batch_size).create_graph()
+        self._graph.create_graph()
+        graph = self._graph
+        
+        
+        self._shape = graph._var_dict
 
         # 1- parse network inputs or parameters to relay
         # 1.1 - Get parameters from graph initializer
         for init_param in graph.initializer:
-            self._params[init_param.variable_name] = self._parse_array(init_param)
-            self._nodes[init_param.variable_name] = new_var(init_param.variable_name,
+            tmp_param = graph.initializer[init_param]
+
+            assert init_param == tmp_param.variable_name
+            self._params[tmp_param.variable_name] = self._parse_array(tmp_param)
+            self._nodes[tmp_param.variable_name] = new_var(tmp_param.variable_name,
                                                             shape=self._params[init_param].shape,
                                                             dtype=self._params[init_param].dtype)
 
         # 1.2 - Get parameters from graph input
         for i in graph.inputs:
-            i_name = i.variable_name
+            i_name = graph.inputs[i].variable_name
             d_type = "float32" # Force datatype for now
             if i_name in self._params:
                 # i is a param instead of an input
@@ -461,22 +461,23 @@ class Exporter(ExprFunctor):
                                               shape=self._params[i_name].shape,
                                               dtype=self._params[i_name].dtype)
             else:
+                
                 self._num_input += 1
                 if i_name in self._shape:
-                    tshape = self._shape[i_name]
+                    tshape = list(self._shape[i_name].dim)
                 else:
                     raise ValueError("Must provide an input shape for `{0}`.".format(i_name))
                 if isinstance(self._dtype, dict):
                     dtype = self._dtype[i_name] if i_name in self._dtype else d_type
                 else:
                     dtype= d_type
+                assert isinstance(tshape, (list, tuple))
                 self._nodes[i_name] = new_var(i_name, shape=tshape, dtype=dtype)
-
         # 2- get list of unsuppported ops
         unsupported_ops = set()
         for node in graph.nodes:
-            op_name = node.type 
-            if op_name not in convert_map and op_name != 'Constant':
+            op_name = graph.nodes[node].type 
+            if op_name not in _convert_map and op_name != 'Constant':
                 unsupported_ops.add(op_name)
         if unsupported_ops:
             msg = 'The following operators are not supported for frontend NNabla: '
@@ -484,27 +485,30 @@ class Exporter(ExprFunctor):
             raise tvm.error.OpNotImplemented(msg)
 
         # 3- construct nodes, nodes are stored as directed acyclic graph
-        for node in graph.node:
-            op_name = node.type
-
-            # inputs =  # Define input list or dict 
+        pdb.set_trace()
+        for n in graph.nodes:
+            op_name = graph.nodes[n].type
+            node = graph.nodes[op_name]
+            # inputs =  # Define input list or dict
+            # Assert self._params type to be dictionary of str to tvm.nd.NDArray
             op = self._convert_operator(self._params, node)
-            node_output = self._fix_outputs(op_name, node.output)
+            node_output = node.output[0]
             if not isinstance(op, _expr.TupleWrapper):
                 outputs_num = 1
             else:
                 outputs_num = len(op)
-            assert len(node_output) == outputs_num, (
+            assert len(node.output) == outputs_num, (
                 "Number of output mismatch {} vs {} in {}.".format(
-                    len(node_output), outputs_num, op_name))
+                    len(node.output), outputs_num, op_name))
             if outputs_num == 1:
-                self._nodes[node_output[0]] = op
+                self._nodes[node_output] = op
             else:
-                for k, i in zip(list(node_output), range(len(node_output))):
+                for k, i in zip(list(node.output), range(len(node.output))):
                     self._nodes[k] = op[i]
             
 
         # 4- return the outputs
+        pdb.set_trace()
         outputs = [self._nodes[i.variable_name] for i in graph.outputs]
         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
         func = _function.Function(analysis.free_vars(outputs), outputs)
@@ -547,7 +551,7 @@ def from_nnabla(model, shape=None, dtype="float32"):
     else:
         print("Import from {} failed.".format(model))
     
-    mod, params = Exporter(nnp, shape, dtype).from_nnabla
+    mod, params = Exporter(nnp, shape, dtype).from_nnabla()
     nnabla_model = None 
     
     return mod, params 
