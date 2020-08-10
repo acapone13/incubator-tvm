@@ -48,8 +48,6 @@ __all__ = ['from_nnabla']
 #     TensorProto.INT64: np.int64,
 # }
 
-g = None
-
 def load_nnp(nnp_path):
     """ Add description """
     
@@ -146,8 +144,13 @@ def _convert_relu():
     return _impl 
 
 def _convert_convolution():
-    def _impl(inputs, func):
-        # TODO: Map layouts
+    def _impl(inputs, func, oarams):
+        # TODO: Modify inputs -> _shape (dict with node name and dimension),
+        # func -> func: Node function
+        # shape -> params (parameters of the function)
+        pdb.set_trace()
+        # TODO: Map layouts. For that, include the shape dict from Exporter in order to get 
+        # channel size and kernel size. data layout can be inferred with the shape
         # TODO: Check for all possible input combinations
         # for stride, pads, dilation, groups, channels, kernel_size 
         data_layout = "NCHW"
@@ -161,14 +164,14 @@ def _convert_convolution():
         _dilation = tuple(func.convolution_param.dilation.dim)
         _group = func.convolution_param.group
 
-        conv_out = _op.nn.conv2d(inputs[0],
-                                 inputs[1],
+        conv_out = _op.nn.conv2d(func.input[0],
+                                 func.input[1],
                                  strides=_stride,
                                  padding=_pad,
                                  dilation=_dilation,
                                  groups=_group,
-                                 channels=func.inputs[1].shape[0],
-                                 kernel_size=func.inputs[1].shape[2:],
+                                 channels= 1,#TODO obtain func.input[1].shape[0] from shape dict,
+                                 kernel_size= 2, #TODO obtain func.input[1].shape[2:] from shape dict,
                                  data_layout=data_layout,
                                  kernel_layout=kernel_layout,
                                  out_layout="",
@@ -189,7 +192,7 @@ def _convert_convolution():
         use_bias = len(inputs) == 3
 
         if use_bias:
-            return _op.nn.bias_add(conv_out, inputs[2])
+            return _op.nn.bias_add(conv_out, inputs[func.input[2]])
         else:
             return conv_out 
     
@@ -248,7 +251,7 @@ _convert_map = {
     'MaxPooling'               : _none(), #_convert_pooling,
     'GlobalAveragePooling2D'   : _none(),
     'GlobalMaxPooling2D'       : _none(),
-    'Convolution'              : _convert_convolution,
+    'Convolution'              : _convert_convolution(),
     'Conv2DTranspose'          : _none(),
     'DepthwiseConv2D'          : _none(),
 
@@ -385,15 +388,15 @@ class Exporter(ExprFunctor):
     # def _parse_dtype(self, func):
     #     """ TODO: Create dtype parser to pass the correct datatype to Relay """
     
-    def _convert_operator(self, input_data, func):
+    def _convert_operator(self, input_data, func, params):
         """ Convert NNabla operator into Relay Operator
         The converter must specify conversions explicitly for incompatible name, and
         apply handlers to operator attributes.
 
         Parameters
         ----------
-        input_data : nnabla_pb2.Parameter
-            Weights
+        input_data : dict of str
+            Name of the inputs with its dimension shape
 
         func : nnabla_pb2.Function
             Function that describes a node. Contains the followinf information:
@@ -402,16 +405,19 @@ class Exporter(ExprFunctor):
                 -   inputs : input functions
                 -   outputs : output functions
                 -   param : Special attribute from each operator
+        
+        params : nnabla_pb2.Parameter
+            Weights 
 
         Returns
         -------
         sym : tvm.relay.function.Function
             Converted relay function
         """
-        pdb.set_trace()
         op_name = func.type 
         if op_name in _convert_map:
-            sym = _convert_map[op_name](input_data, func)
+            sym = _convert_map[op_name](input_data, func, params)
+            pdb.set_trace()
         else:
             raise tvm.error.OpNotImplemented(
                 'Operator {} is not supported for frontend NNabla.'.format(op_name))
@@ -435,7 +441,7 @@ class Exporter(ExprFunctor):
         self._graph.create_graph()
         graph = self._graph
         
-        
+        # TODO: Convert dict of nnabla_pb2.shape into dict ot list/tuple
         self._shape = graph._var_dict
 
         # 1- parse network inputs or parameters to relay
@@ -491,7 +497,7 @@ class Exporter(ExprFunctor):
             node = graph.nodes[op_name]
             # inputs =  # Define input list or dict
             # Assert self._params type to be dictionary of str to tvm.nd.NDArray
-            op = self._convert_operator(self._params, node)
+            op = self._convert_operator(self._shape, node, self._params)
             node_output = node.output[0]
             if not isinstance(op, _expr.TupleWrapper):
                 outputs_num = 1
