@@ -21,6 +21,7 @@ import tvm
 from tvm import relay
 from tvm.relay import op, transform
 from tvm.relay import ExprMutator
+import pdb
 
 def run_opt_pass(expr, opt_pass):
     """Exectue a relay pass."""
@@ -193,6 +194,7 @@ class ExprPack(ExprMutator):
         self.pad = op.op.get("nn.pad")
         self.upsampling = op.op.get("nn.upsampling")
         self.reshape = op.op.get("reshape")
+        self.concatenate = op.op.get("concatenate")
         self.number_of_conv2d = 0
         super().__init__()
 
@@ -223,6 +225,7 @@ class ExprPack(ExprMutator):
                 w_lanes = 8 // self.weight_bits
                 data_layout = "NCHW%dn%dc" % (self.bfactor, self.cfactor)
                 kernel_layout = "OIHW%do%di" % (self.cfactor, self.cfactor)
+                # pdb.set_trace()
                 data, weight = args
                 data_shape = _to_shape(input_types[0].shape)
                 kernel_shape = _to_shape(input_types[1].shape)
@@ -352,6 +355,12 @@ class ExprPack(ExprMutator):
                 data, _ = args
                 data = op.transpose(data, axes=(0, 4, 1, 5, 2, 3))
                 return op.reshape(data, [int(x) for x in input_types[0].shape])
+            # Modifications
+            elif call.op == self.concatenate: 
+                # pdb.set_trace()
+                data, constant = args[0]
+                data = [data, constant]
+                return op.concatenate(data, axis=1)
 
         return relay.Call(
             self.visit(call.op),
