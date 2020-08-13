@@ -1,11 +1,26 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 """ NNabla: Neural Network Libraries Frontend for Relay """
 import numpy as np
 import collections
 import nnabla as nn
-# from nnabla.utils.nnp_graph import NnpLoader, FunctionProto, VariableProto
 from nnabla.utils import nnabla_pb2
 from nnabla.utils.converter.nnabla import NnpImporter
-# from nnabla.parameter import get_parameter_or_create, save_parameters, get_parameter_or_create
 import google.protobuf.text_format as text_format 
 import zipfile
 import shutil
@@ -25,19 +40,13 @@ from .. import function as _function
 from .. import op as _op
 from ..expr_functor import ExprFunctor 
 
-# from .common import AttrCvt, Renamer
+from .common import AttrCvt, Renamer
 from .common import get_relay_op, new_var, infer_shape, infer_channels
 from .common import infer_type, get_name
 from .common import infer_value as _infer_value
 from .common import infer_value_simulated as _infer_value_simulated 
 
 __all__ = ['from_nnabla']
-
-# #############################################################################
-# Helper functions
-# ----------------
-# 
-
 # TENSOR_TYPE_TO_DTYPE = {
 #     TensorProto.FLOAT: np.float32,
 #     TensorProto.BOOL: np.bool,
@@ -48,23 +57,45 @@ __all__ = ['from_nnabla']
 #     TensorProto.INT64: np.int64,
 # }
 
-def load_nnp(nnp_path):
-    """ Add description """
-    
-    return NnpImporter(nnp_path, expad_network=False, executor_index=True).execute()
+# #############################################################################
+# Helper functions
+# ----------------
 
-def default_layout(dims):
+def load_nnp(nnp_path):
+    """ Load nnp file and create a NnpImporter object with protobuf parameters which
+        will be later used to convert into the Relay IR.
+        This function only is usable to parse the NNabla graph into the Relay IR.
+        To execute the Nnp file with NNabla use the NnpLoader tool insted.
+
+        Parameters
+        ----------
+        nnp_path : str
+            Path to the .nnp file from NNabla.
+
+        Returns
+        -------
+        net : nnabla.utils.converter.nnabla.importer.NnpImporter
+            Imported nnp file 
+        """
+
+    """  This function only is usable to parse the NNabla graph into the Relay IR. """
+    net = NnpImporter(nnp_path, expad_network=False, executor_index=True)
+    
+    return net.execute()
+
+def default_layout(shape, op_name):
     """
     A helper function to get default layout 
     """
-    if dims == 1:
+    dims = len(shape)
+    if dims == 3:
         return 'NCW'
-    elif dims == 2:
+    elif dims == 4:
         return 'NCHW'
-    elif dims == 3:
-        return 'NCDHW'
+    # elif dims == 5:
+    #     return 'NCDHW'
 
-    msg = "Only 1d, 2d and 3d layouts are currently supported"
+    msg = "Only 1d and 2d layouts are currently supported"
     raise tvm.error.OpAttributeInvalid(msg.format(op_name))
 
 def  dimension_picker(prefix, suffix=''):
@@ -76,20 +107,20 @@ def  dimension_picker(prefix, suffix=''):
             return prefix + '1d' + suffix 
         if len(kernel) == 2:
             return prefix + '2d' + suffix 
-        if len(kernel) == 3:
-            return prefix + '3d' + suffix 
-        msg = 'Only 1D, 2D and 3D kernels are supported for operator {}.'
-        op_name = prefix + '1d/2d/3d'
+        # if len(kernel) == 3:
+        #     return prefix + '3d' + suffix 
+        msg = 'Only 1D and 2D kernels are supported for operator {}.'
+        op_name = prefix + '1d/2d'
         raise tvm.error.OpAttributeInvalid(msg.format(op_name))
 
 def dimension_constraint():
     """ A helper function to restric dimensions """
     def _dim_check(attrs):
-        if len(attrs['kernel_shape']) in [1, 2, 3]:
+        if len(attrs['kernel_shape']) in [1, 2]:
             return True
         return False 
     
-    return _dim_check, "Only 1d, 2d, 3d kernel supported."
+    return _dim_check, "Only 1d, 2d kernel supported."
 
 def replace_negative_size_with_batch_size(shape, batch_size):
     """Replace all dimensions with negative values to batch size"""
@@ -115,7 +146,7 @@ def infer_nnabla_shape(shape):
         return shape
 
 class nnabla_input():
-    """ Dual purpose list or dictionary access objec. 
+    """ Dual purpose list or dictionary access object. 
         Extracted from ONNX frontend parser."""
     
     def __init__(self):
@@ -176,7 +207,9 @@ class nnabla_input():
 # Operator definition
 # -------------------
 # 
-# Each NNabla operator has its own converter 
+# Nnabla operators are grouped in different converters 
+# (e.g.: Activations in _convert_activations), specific functions have their
+# own converter (e.g.: 2D Convolution as _convert_convolution).
 
 def _none():
     def _impl(inputs, func, shapes):
@@ -205,7 +238,6 @@ def _convert_activation():
         act_type = func.type
         data = inputs[0]
 
-
         if act_type == 'Softmax':
             return _op.nn.softmax(data, axes=1)
         if act_type == 'ReLU':
@@ -225,9 +257,7 @@ def _convert_activation():
 
 def _convert_convolution():
     def _impl(inputs, func, shapes):
-        """ 
         
-        """
         # TODO: Map layouts. For that, include the shape dict from Exporter in order to get 
         # channel size and kernel size. data layout can be inferred with the shape
         # TODO: Check for all possible input combinations
@@ -273,7 +303,7 @@ def _convert_gemm():
         # Equivalent Op to GEMM in ONNX
         # Y = alpha * A * B + beta * C(If exists)
         
-        # TODO: Obtain values from NNabla Parameters
+        # TODO: Infer values from NNabla Parameters
         alpha = float(1.0)
         beta = float(1.0)
         transA = 0
@@ -301,7 +331,7 @@ def _convert_gemm():
 
 def _convert_advanced_activation():
     def _impl(inputs, func, shapes):
-        # Populate
+        # TODO: Create activation operators with clip values
         return None 
     
     return _impl
@@ -310,6 +340,7 @@ def _convert_pooling():
     def _impl(inputs, func, shapes):
         # Get data_layout with check_data_layout
         pool_type = func.type
+        data_layout = default_layout(shapes[0], pool_type)
         if pool_type in ['GlobalMaxPooling','GlobalAveragePooling']:
             raise tvm.error.OpNotImplemented(
                 'Function {} has experimental support in Nnabla frontend, \
@@ -319,12 +350,14 @@ def _convert_pooling():
             params = {'pool_size': tuple(func.average_pooling_param.kernel.dim),
                       'strides': tuple(func.average_pooling_param.stride.dim),
                       'padding': tuple(func.average_pooling_param.pad.dim),
-                      'count_include_pad': func.average_pooling_param.including_pad}
+                      'count_include_pad': func.average_pooling_param.including_pad,
+                      'layout': data_layout}
             return _op.nn.avg_pool2d(inputs[0], **params)
         if pool_type == 'MaxPooling':
             params = {'pool_size': tuple(func.max_pooling_param.kernel.dim),
                       'strides': tuple(func.max_pooling_param.stride.dim),
-                      'padding': tuple(func.max_pooling_param.pad.dim)}
+                      'padding': tuple(func.max_pooling_param.pad.dim),
+                      'layout': data_layout}
             return _op.nn.max_pool2d(inputs[0], **params)
 
         raise tvm.error.OpNotImplemented(
@@ -341,15 +374,15 @@ def _convert_batchnorm():
 
         # Ignore momentum/decay_rate
         # By default NNabla includes scale and bias term, otherwise no_scale and no_bias 
-        # should be includedn in the parameters  
+        # should be included in the parameters  
         params = {'beta': inputs[1],
                   'gamma': inputs[2],
                   'moving_mean': inputs[3],
                   'moving_var': inputs[4],
                   'axis': func.batch_normalization_param.axes[0],
                   'epsilon': func.batch_normalization_param.eps,
-                  'center': False,
-                  'scale': False}
+                  'center': True,
+                  'scale': True}
   
         result, moving_mean, moving_var = _op.nn.batch_norm(inputs[0], **params)
         return result
@@ -360,7 +393,6 @@ def _convert_elemwise():
     def _impl(inputs, func, shapes):
         op_name = func.type
         assert len(inputs) == 2, "Math operator {} take 2 inputs, {} given".format(op_name, len(inputs))
-        # result = inputs[0]
         if op_name in ['Add2', 'Mul2', 'Div2', 'Sub2', 'Pow2']:
             # Operations with numpy-style broadcasting
             op_map = {'Add2': _op.add,
@@ -575,7 +607,7 @@ class NNablaGraph(object):
 class Exporter(ExprFunctor):
     """ Add information """
     def __init__(self, nnp, shape, dtype, batch_size=1):
-        # For creating Graph 
+        # For Graph creation
         self._nnp = nnp 
         self._batch_size = batch_size
         self._graph = NNablaGraph(nnp, shape, dtype, batch_size)
@@ -588,7 +620,7 @@ class Exporter(ExprFunctor):
         self._shape = shape if shape else {}
         self._dtype = dtype
 
-        # For infering Values
+        # For Value infering
         self._temp_params = {}
         self._mod = None
         self._infer_simulated = True 
@@ -605,7 +637,7 @@ class Exporter(ExprFunctor):
         return _nd.array(np_array)
     
     # def _parse_dtype(self, func):
-    #     """ TODO: Create dtype parser to pass the correct datatype to Relay """
+    #     TODO: Create dtype parser to pass the correct datatype to Relay
     
     def _convert_operator(self, input_data, func, shapes):
         """ Convert NNabla operator into Relay Operator
@@ -655,11 +687,10 @@ class Exporter(ExprFunctor):
             A dict of name: tvm.nd.array pairs, used as pretrained weights
         """
         # Create NNabla graph
-        # graph = NNablaGraph(self._nnp, self._shape, self._dtype, self._batch_size).create_graph()
         self._graph.create_graph()
         graph = self._graph
         
-        # TODO: Convert dict of nnabla_pb2.shape into dict ot list/tuple
+        # Convert dict of nnabla_pb2.shape into dict ot list/tuple
         self._shape = graph._var_dict
 
         # 1- parse network inputs or parameters to relay
@@ -763,8 +794,8 @@ def from_nnabla(model, shape=None, dtype="float32"):
 
     Parameters
     ----------
-    model : NNabla.Nnp 
-        The NNabla model to be converted in .nnp file, must contain
+    model : nnabla.utils.converter.nnabla.importer.NnpImporter 
+        The NNabla model to be converted from .nnp file, must contain
         the protobuf object
 
     shape: dict of str to int list/tuple
@@ -788,13 +819,13 @@ def from_nnabla(model, shape=None, dtype="float32"):
         # TODO: Check model
     except ImportError:
         raise ImportError("Nnabla must be installed!")
-    nnp = load_nnp(model)
-    if nnp is not None:
-        network_name = nnp.protobuf.executor[0].network_name
+    
+    if model is not None:
+        network_name = model.protobuf.executor[0].network_name
     else:
         print("Import from {} failed.".format(model))
     
-    mod, params = Exporter(nnp, shape, dtype).from_nnabla()
+    mod, params = Exporter(model, shape, dtype).from_nnabla()
     nnabla_model = None 
     
     return mod, params 
