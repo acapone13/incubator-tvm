@@ -83,17 +83,17 @@ def load_nnp(nnp_path):
     
     return net.execute()
 
-def default_layout(shape, op_name):
+def default_layout(dims, op_name):
     """
     A helper function to get default layout 
     """
-    dims = len(shape)
-    if dims == 3:
+    if dims == 1:
         return 'NCW'
-    elif dims == 4:
+    elif dims == 2:
         return 'NCHW'
-    # elif dims == 5:
-    #     return 'NCDHW'
+    elif dims == 3:
+        pass
+        # return 'NCDHW'
 
     msg = "Only 1d and 2d layouts are currently supported"
     raise tvm.error.OpAttributeInvalid(msg.format(op_name))
@@ -101,26 +101,28 @@ def default_layout(shape, op_name):
 def  dimension_picker(prefix, suffix=''):
     """ Check that dimensions are supported """
     # TODO: Check variables names
-    def _impl(attr):
-        kernel = attr['kernel_shape']
+    def _impl(attrs):
+        kernel = attrs['pool_size']
         if len(kernel) == 1:
             return prefix + '1d' + suffix 
         if len(kernel) == 2:
             return prefix + '2d' + suffix 
-        # if len(kernel) == 3:
-        #     return prefix + '3d' + suffix 
+        if len(kernel) == 3:
+            return prefix + '3d' + suffix 
         msg = 'Only 1D and 2D kernels are supported for operator {}.'
         op_name = prefix + '1d/2d'
         raise tvm.error.OpAttributeInvalid(msg.format(op_name))
+    
+    return _impl
 
 def dimension_constraint():
     """ A helper function to restric dimensions """
     def _dim_check(attrs):
-        if len(attrs['kernel_shape']) in [1, 2]:
+        if len(attrs['pool_size']) in [1, 2, 3]:
             return True
         return False 
     
-    return _dim_check, "Only 1d, 2d kernel supported."
+    return _dim_check, "Only 1d, 2d, 3d kernel supported."
 
 def replace_negative_size_with_batch_size(shape, batch_size):
     """Replace all dimensions with negative values to batch size"""
@@ -340,25 +342,30 @@ def _convert_pooling():
     def _impl(inputs, func, shapes):
         # Get data_layout with check_data_layout
         pool_type = func.type
-        data_layout = default_layout(shapes[0], pool_type)
+        data_layout = default_layout(len(shapes[0]) - 2, pool_type)
         if pool_type in ['GlobalMaxPooling','GlobalAveragePooling']:
             raise tvm.error.OpNotImplemented(
                 'Function {} has experimental support in Nnabla frontend, \
                 please do not use it'.format(pool_type))
         if pool_type == 'AveragePooling':
             # ignore_border is not considered
-            params = {'pool_size': tuple(func.average_pooling_param.kernel.dim),
-                      'strides': tuple(func.average_pooling_param.stride.dim),
-                      'padding': tuple(func.average_pooling_param.pad.dim),
-                      'count_include_pad': func.average_pooling_param.including_pad,
-                      'layout': data_layout}
-            return _op.nn.avg_pool2d(inputs[0], **params)
+            attrs = {'pool_size': tuple(func.average_pooling_param.kernel.dim),
+                     'strides': tuple(func.average_pooling_param.stride.dim),
+                     'padding': tuple(func.average_pooling_param.pad.dim),
+                     'count_include_pad': func.average_pooling_param.including_pad,
+                     'layout': data_layout}
+            return AttrCvt(op_name=dimension_picker("avg_pool"),
+                           custom_check=dimension_constraint())(inputs, attrs)
+            # return _op.nn.avg_pool2d(inputs[0], **attrs)
         if pool_type == 'MaxPooling':
-            params = {'pool_size': tuple(func.max_pooling_param.kernel.dim),
-                      'strides': tuple(func.max_pooling_param.stride.dim),
-                      'padding': tuple(func.max_pooling_param.pad.dim),
-                      'layout': data_layout}
-            return _op.nn.max_pool2d(inputs[0], **params)
+            attrs = {'pool_size': tuple(func.max_pooling_param.kernel.dim),
+                     'strides': tuple(func.max_pooling_param.stride.dim),
+                     'padding': tuple(func.max_pooling_param.pad.dim),
+                     'layout': data_layout}
+
+            return AttrCvt(op_name=dimension_picker("max_pool"),
+                           custom_check=dimension_constraint())(inputs, attrs)
+            # return _op.nn.max_pool2d(inputs[0], **attrs)
 
         raise tvm.error.OpNotImplemented(
             'Pooling Operator {} is not yet supported \
@@ -375,7 +382,7 @@ def _convert_batchnorm():
         # Ignore momentum/decay_rate
         # By default NNabla includes scale and bias term, otherwise no_scale and no_bias 
         # should be included in the parameters  
-        params = {'beta': inputs[1],
+        attrs = {'beta': inputs[1],
                   'gamma': inputs[2],
                   'moving_mean': inputs[3],
                   'moving_var': inputs[4],
@@ -384,7 +391,7 @@ def _convert_batchnorm():
                   'center': True,
                   'scale': True}
   
-        result, moving_mean, moving_var = _op.nn.batch_norm(inputs[0], **params)
+        result, moving_mean, moving_var = _op.nn.batch_norm(inputs[0], **attrs)
         return result
 
     return _impl 
