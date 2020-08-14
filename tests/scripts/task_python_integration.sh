@@ -22,6 +22,8 @@ set -u
 source tests/scripts/setup-pytest-env.sh
 export PYTHONPATH=${PYTHONPATH}:${TVM_PATH}/apps/extension/python
 export LD_LIBRARY_PATH="build:${LD_LIBRARY_PATH:-}"
+
+# to avoid CI CPU thread throttling.
 export TVM_BIND_THREADS=0
 export TVM_NUM_THREADS=2
 
@@ -34,7 +36,7 @@ make cython3
 # Test MISRA-C runtime
 cd apps/bundle_deploy
 rm -rf build
-# make test_dynamic test_static
+make test_dynamic test_static
 cd ../..
 
 # Test extern package

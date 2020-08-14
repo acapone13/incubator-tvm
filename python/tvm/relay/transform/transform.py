@@ -58,6 +58,7 @@ def build_config(opt_level=2,
                 "EliminateCommonSubexpr": 3,
                 "CombineParallelConv2D": 4,
                 "CombineParallelDense": 4,
+                "CombineParallelBatchMatmul": 4,
                 "FastMath": 4
             }
 
@@ -276,7 +277,7 @@ def CombineParallelConv2D(min_num_branches=3):
     return _ffi_api.CombineParallelConv2D(min_num_branches)
 
 
-def CombineParallelDense(min_num_branches=3):
+def CombineParallelDense(min_num_branches=3, to_batch=True):
     """Combine multiple dense operators into one. For example:
 
     .. code-block
@@ -294,6 +295,51 @@ def CombineParallelDense(min_num_branches=3):
                 |
             batch_matmul+elemwise/bcast (2,2,2)
 
+    or (if to_batch=False)
+
+    .. code-block
+
+                data
+                |
+            dense+elemwise/bcast (2,2+2)
+
+    Parameters
+    ----------
+    min_num_branches : int
+        The minimum number of required parallel branches for performing this
+        optimization.
+
+    to_batch_matmul : bool
+        If True, combine parallel dense ops into batch_matmul op.
+        If False, combine parallel dense ops into dense op.
+
+    Returns
+    -------
+    ret: tvm.transform.Pass
+        The registered pass that combines parallel dense operators.
+    """
+    return _ffi_api.CombineParallelDense(min_num_branches, to_batch)
+
+def CombineParallelBatchMatmul(min_num_branches=3):
+    """Combine multiple batch matmul operators into one. For example:
+
+    .. code-block
+                             data (1, 2, 3)
+                         /                  \
+        batch_matmul(data, (1, 4, 3))    batch_matmul(data, (1, 5, 3))
+            |                                |
+        elemwise/bcast (1, 2, 4)         elemwise/bcast (1, 2, 5)
+
+    Would become:
+
+    .. code-block
+
+                data (1, 2, 3)
+                |
+            batch_matmul(data, (1, 4+5, 3))
+                |
+            elemwise/bcast (1 ,2, 4+5)
+
     Parameters
     ----------
     min_num_branches : int
@@ -305,7 +351,22 @@ def CombineParallelDense(min_num_branches=3):
     ret: tvm.transform.Pass
         The registered pass that combines parallel dense operators.
     """
-    return _ffi_api.CombineParallelDense(min_num_branches)
+    return _ffi_api.CombineParallelBatchMatmul(min_num_branches)
+
+
+def BatchingOps():
+    """Batching parallel operators into one for Conv2D, Dense and BatchMatmul.
+
+    Returns
+    -------
+    ret: tvm.transform.Pass
+        The sequential pass which apply batching for different operator types.
+    """
+    return tvm.transform.Sequential([
+        CombineParallelConv2D(),
+        CombineParallelDense(),
+        CombineParallelBatchMatmul()
+    ])
 
 
 def AlterOpLayout():
@@ -454,6 +515,21 @@ def ToANormalForm():
     """
     return _ffi_api.ToANormalForm()
 
+def ToBasicBlockNormalForm():
+    """Turn an expression to Basic Block Normal Form.
+    We define a block as a group of expressions implied by the scope structure.
+    Each graph node can only belong to a single block.
+    For any value that is being used in multiple blocks, it has to be referred
+    by a Var which is defined in a block, whose scope is the least common ancestor
+    of blocks this value is used.
+
+    Returns
+    -------
+    ret: tvm.transform.Pass
+        The registered pass that transforms an expression into Basic Block Normal Form.
+    """
+    return _ffi_api.ToBasicBlockNormalForm()
+
 
 def ToCPS(expr, mod=None):
     """
@@ -589,6 +665,17 @@ def AnnotateTarget(targets):
     if isinstance(targets, str):
         targets = [targets]
     return _ffi_api.AnnotateTarget([tvm.runtime.container.String(t) for t in targets])
+
+
+def DynamicToStatic():
+    """If possible, convert tvm.relay.dynamic* ops to static versions
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered pass for dynamic->static conversion.
+    """
+    return _ffi_api.DynamicToStatic()
 
 
 def Inline():
@@ -864,6 +951,7 @@ def DenseToSparse(weight_name, weight_shape):
     """
     return _ffi_api.DenseToSparse(weight_name, weight_shape)
 
+
 def SimplifyFCTranspose(target_weight_name):
     """
     Rewrite ```y = nn.dense(x, transpose(w, [1, 0]))``` to ```y = nn.dense(x, wt)```
@@ -881,3 +969,15 @@ def SimplifyFCTranspose(target_weight_name):
         The registered SimplifyFCTranspose pass.
     """
     return _ffi_api.SimplifyFCTranspose(target_weight_name)
+
+
+def SimplifyExpr():
+    """
+    Simplify the Relay expression, including merging consecutive reshapes.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered SimplifyExpr pass.
+    """
+    return _ffi_api.SimplifyExpr()

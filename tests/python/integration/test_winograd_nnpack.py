@@ -21,9 +21,9 @@ from tvm import autotvm
 from tvm.autotvm.task.space import FallbackConfigEntity
 from tvm.contrib import nnpack
 from tvm.contrib.pickle_memoize import memoize
-import topi
-import topi.testing
-from topi.util import get_const_tuple
+from tvm import topi
+import tvm.topi.testing
+from tvm.topi.util import get_const_tuple
 from pytest import skip
 
 
@@ -47,8 +47,8 @@ def verify_conv2d_nchw(batch, in_channel, in_size, num_filter, kernel, stride, p
         a_np = np.random.uniform(size=a_shape).astype(dtype)
         w_np = np.random.uniform(size=w_shape).astype(dtype)
         b_np = np.random.uniform(size=bias_shape).astype(dtype)
-        dw_np = topi.testing.dilate_python(w_np, (1, 1, dilation, dilation))
-        c_np = topi.testing.conv2d_nchw_python(a_np, dw_np, stride, padding)
+        dw_np = tvm.topi.testing.dilate_python(w_np, (1, 1, dilation, dilation))
+        c_np = tvm.topi.testing.conv2d_nchw_python(a_np, dw_np, stride, padding)
         if add_bias:
             b_np = np.random.uniform(size=bias_shape).astype(dtype)
             c_np += b_np
@@ -106,7 +106,7 @@ def test_conv2d_nchw():
         skip("nnpack is not available")
 
     devices = ['llvm -device=arm_cpu']
-    autotvm.DispatchContext.current.silent = True
+    autotvm.GLOBAL_SCOPE.silent = True
     with WinogradFallback():
         # resnet 18 workloads
         verify_conv2d_nchw(1, 64, 56, 64, 3, 1, 1, devices=devices)
@@ -137,8 +137,9 @@ def test_conv2d_nchw():
         # werid workloads
         verify_conv2d_nchw(1, 3, 3, 3, 3, 1, 1, devices=devices)
         verify_conv2d_nchw(1, 13, 71, 59, 3, 1, 1, devices=devices)
+    autotvm.GLOBAL_SCOPE.silent = False
 
 
 if __name__ == "__main__":
     import pytest
-    pytest.main()
+    pytest.main([__file__])
