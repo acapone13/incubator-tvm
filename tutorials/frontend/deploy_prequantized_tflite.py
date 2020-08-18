@@ -191,7 +191,7 @@ shape_dict = {'input': data.shape}
 mod, params = relay.frontend.from_tflite(tflite_model,
                                          shape_dict=shape_dict,
                                          dtype_dict=dtype_dict)
-# print(mod)
+print(mod)
 
 ###############################################################################
 # Lets now the compile the Relay module. We use the "llvm" target here. Please replace it with the

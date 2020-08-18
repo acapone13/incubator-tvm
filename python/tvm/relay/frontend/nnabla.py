@@ -18,17 +18,19 @@
 """ NNabla: Neural Network Libraries Frontend for Relay """
 import numpy as np
 import collections
-import nnabla as nn
-from nnabla.utils import nnabla_pb2
-from nnabla.utils.converter.nnabla import NnpImporter
-import google.protobuf.text_format as text_format 
 import zipfile
 import shutil
 import tempfile
+import logging
 import os
 import attr  
 import sys 
 import pdb
+logging.basicConfig(level=logging.CRITICAL)
+import nnabla as nn
+from nnabla.utils import nnabla_pb2
+from nnabla.utils.converter.nnabla import NnpImporter
+import google.protobuf.text_format as text_format 
 
 import tvm 
 from tvm.ir import IRModule
@@ -47,6 +49,8 @@ from .common import infer_value as _infer_value
 from .common import infer_value_simulated as _infer_value_simulated 
 
 __all__ = ['from_nnabla']
+
+# logging.basicConfig(level=logging.CRITICAL)
 # TENSOR_TYPE_TO_DTYPE = {
 #     TensorProto.FLOAT: np.float32,
 #     TensorProto.BOOL: np.bool,
@@ -147,6 +151,31 @@ def infer_nnabla_shape(shape):
     else:
         return shape
 
+# Quantization methods
+def find_delta(weights, bw):
+    """ Finds optimal quantization step size for FP quantization
+    Parameters
+    ----------
+    w : NDarray or nnabla_pb2.Parameter
+        Weights
+
+    bw : int or str
+        Bitwidth for the quantization method
+
+    Returns
+    -------
+    d : int or float
+        Stepsize value
+    """
+    pdb.set_trace()
+    maxabs_w = np.max(np.abs(weights.asnumpy())) + np.finfo(np.float32).eps 
+
+    if bw > 4:
+        return 2**(np.ceil(np.log2(maxabs_w/(2**(bw-1)-1))))
+    else:
+        return 2**(np.floor(np.log2(maxabs_w/(2**(bw-1)-1))))
+
+
 class nnabla_input():
     """ Dual purpose list or dictionary access object. 
         Extracted from ONNX frontend parser."""
@@ -194,6 +223,7 @@ class nnabla_input():
             return output 
         
         raise StopIteration
+    
 
 # def get_tensor_type(name, type_dict):
 #     if name in type_dict:
@@ -516,6 +546,9 @@ _convert_map = {
     'Concatenate'              : _convert_concat(),
     'BatchNormalization'       : _convert_batchnorm(),
     'Affine'                   : _convert_affine(),
+
+    'FixedPointQuantize'       : _none(),
+    'Pow2Quantize'             : _none(),
 }
 
 # #############################################################################
@@ -696,7 +729,7 @@ class Exporter(ExprFunctor):
         # Create NNabla graph
         self._graph.create_graph()
         graph = self._graph
-        
+    
         # Convert dict of nnabla_pb2.shape into dict ot list/tuple
         self._shape = graph._var_dict
 
@@ -751,7 +784,7 @@ class Exporter(ExprFunctor):
         for n in graph.nodes:
             op_type = graph.nodes[n].type
             op_name = graph.nodes[n].name
-            
+        
             node = graph.nodes[op_name]
             # Assert self._params type to be dictionary of str to tvm.nd.NDArray
             inputs = nnabla_input()
