@@ -16,7 +16,7 @@
 # under the License.
 # pylint: disable=unused-argument
 """A Relay implementation of graph packing."""
-
+import pdb
 import tvm
 from tvm import relay
 from tvm.relay import op, transform
@@ -151,6 +151,19 @@ def _pack_const(data, dshape, dtype, bfactor, cfactor):
     return data
 
 
+def _pack_concat_const(data, dshape, dtype, bfactor, cfactor):
+    """ Pack a constant parameter for concatenation """
+    dshape = _to_shape(dshape)
+    assert len(dshape) == 4
+    assert dshape[1] % cfactor == 0
+    data = op.reshape(data,
+                      newshape=(dshape[0] // bfactor, 
+                                dshape[1] // cfactor,
+                                dshape[2], dshape[3],
+                                bfactor, cfactor))
+    return data
+
+
 def _get_tensor_shape(node):
     """Get node shape.
     """
@@ -193,6 +206,7 @@ class ExprPack(ExprMutator):
         self.pad = op.op.get("nn.pad")
         self.upsampling = op.op.get("nn.upsampling")
         self.reshape = op.op.get("reshape")
+        self.concatenate = op.op.get("concatenate")
         self.number_of_conv2d = 0
         super().__init__()
 
@@ -352,6 +366,19 @@ class ExprPack(ExprMutator):
                 data, = args
                 data = op.transpose(data, axes=(0, 4, 1, 5, 2, 3))
                 return op.reshape(data, [int(x) for x in input_types[0].shape])
+            elif call.op == self.concatenate:
+                # pdb.set_trace()
+                data, const = args[0] 
+                input_shape = input_types[0].fields[0].shape
+                input_dtype = input_types[0].fields[0].dtype
+                const = _pack_concat_const(const,
+                                           _to_shape(input_shape),
+                                           input_dtype,
+                                           self.bfactor,
+                                           self.cfactor)
+                axis = call.attrs.axis
+                data = (data, const)
+                return op.concatenate(data, axis)
 
         return relay.Call(
             self.visit(call.op),

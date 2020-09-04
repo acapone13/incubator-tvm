@@ -14,7 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
 """ NNabla: Neural Network Libraries Frontend for Relay """
 import numpy as np
 import collections
@@ -25,7 +24,6 @@ import logging
 import os
 import attr  
 import sys 
-import pdb
 logging.basicConfig(level=logging.CRITICAL)
 import nnabla as nn
 from nnabla.utils import nnabla_pb2
@@ -46,20 +44,11 @@ from .common import AttrCvt, Renamer
 from .common import get_relay_op, new_var, infer_shape, infer_channels
 from .common import infer_type, get_name
 from .common import infer_value as _infer_value
-from .common import infer_value_simulated as _infer_value_simulated 
+from .common import infer_value_simulated as _infer_value_simulated
+
+from . import qnn_nnabla
 
 __all__ = ['from_nnabla']
-
-# logging.basicConfig(level=logging.CRITICAL)
-# TENSOR_TYPE_TO_DTYPE = {
-#     TensorProto.FLOAT: np.float32,
-#     TensorProto.BOOL: np.bool,
-#     TensorProto.UINT8: np.uint8,
-#     TensorProto.INT8: np.int8,
-#     TensorProto.INT32: np.uint32,
-#     TensorProto.INT32: np.int32,
-#     TensorProto.INT64: np.int64,
-# }
 
 # #############################################################################
 # Helper functions
@@ -69,7 +58,7 @@ def load_nnp(nnp_path):
     """ Load nnp file and create a NnpImporter object with protobuf parameters which
         will be later used to convert into the Relay IR.
         This function only is usable to parse the NNabla graph into the Relay IR.
-        To execute the Nnp file with NNabla use the NnpLoader tool insted.
+        To execute the Nnp file with NNabla use the NnpLoader tool instead.
 
         Parameters
         ----------
@@ -151,34 +140,8 @@ def infer_nnabla_shape(shape):
     else:
         return shape
 
-# Quantization methods
-def find_delta(weights, bw):
-    """ Finds optimal quantization step size for FP quantization
-    Parameters
-    ----------
-    w : NDarray or nnabla_pb2.Parameter
-        Weights
-
-    bw : int or str
-        Bitwidth for the quantization method
-
-    Returns
-    -------
-    d : int or float
-        Stepsize value
-    """
-    pdb.set_trace()
-    maxabs_w = np.max(np.abs(weights.asnumpy())) + np.finfo(np.float32).eps 
-
-    if bw > 4:
-        return 2**(np.ceil(np.log2(maxabs_w/(2**(bw-1)-1))))
-    else:
-        return 2**(np.floor(np.log2(maxabs_w/(2**(bw-1)-1))))
-
-
 class nnabla_input():
-    """ Dual purpose list or dictionary access object. 
-        Extracted from ONNX frontend parser."""
+    """ Dual purpose list or dictionary access object. """
     
     def __init__(self):
         self.input_keys = []
@@ -208,7 +171,25 @@ class nnabla_input():
     
     def keys(self):
         return self.input_keys
-    
+
+    def replace(self, old_item, item, value):
+        """ Method defined to replace full-precision weights with quantized values """
+        if isinstance(item, int):
+            # Remove old value
+            self.input_dict.pop(self.input_keys[old_item])
+            self.input_keys.remove(old_item)
+
+            # Insert new value
+            self.input_dict[self.input_keys[item]] = value
+        elif isinstance(item, str):
+            # Remove old value
+            self.input_dict.pop(old_item)
+            self.input_keys.remove(old_item)
+
+            # Insert new value
+            self.input_keys.append(item)
+            self.input_dict[item] = value
+
     def __len__(self):
         return len(self.input_keys)
 
@@ -223,17 +204,21 @@ class nnabla_input():
             return output 
         
         raise StopIteration
-    
 
-# def get_tensor_type(name, type_dict):
-#     if name in type_dict:
-#         return type_dict[name]
-#     else:
-#         # Default tensor type to float
-#         return TensorProto.FLOAT
+def get_tensor_type(name, type_dict):
+    # TODO: Grab tensor type and provide proper type to convert to numpy array
+    # This function should return the numpy type (e.g.: np.float32) to convert
+    # NNabla tensor into numpy array. Method should be called inside _parse_array
+    # function defined inside the Exporter object.
+    return None
 
-# TODO: Define _check_data_format function
-# def check_data_format():
+def check_data_format():
+    # TODO: Define _check_data_format function
+    #       This function should check the layout of each layer,
+    #       it should return "NCWH" (channel_first) or "NWHC" (channel_first),
+    #       this will allow to use Relays Data Layout transformation for
+    #       Optimization.
+    return None
 
 # #############################################################################
 # Operator definition
@@ -241,17 +226,20 @@ class nnabla_input():
 # 
 # Nnabla operators are grouped in different converters 
 # (e.g.: Activations in _convert_activations), specific functions have their
-# own converter (e.g.: 2D Convolution as _convert_convolution).
+# own converter (e.g.: 2D Convolution as _convert_convolution). 
+# Quantizer converters are defined in qnn_nnabla.py
 
 def _none():
     def _impl(inputs, func, shapes):
+        print(func.name)
         return None 
     return _impl 
 
 def _convert_reshape():
     def _impl(inputs, func, shapes):
-        if hasattr(func, 'shape'):
-            return _op.reshape(inputs[0], func.shape)
+        if hasattr(func.reshape_param, 'shape'):
+            shape = tuple(func.reshape_param.shape.dim)
+            return _op.reshape(inputs[0], shape)
         else:
             raise NotImplementedError("Dinamic input case not yet supported")
             # return _op.reshape(inputs[0], inputs[1])
@@ -289,11 +277,11 @@ def _convert_activation():
 
 def _convert_convolution():
     def _impl(inputs, func, shapes):
-        
         # TODO: Map layouts. For that, include the shape dict from Exporter in order to get 
         # channel size and kernel size. data layout can be inferred with the shape
         # TODO: Check for all possible input combinations
         # for stride, pads, dilation, groups, channels, kernel_size 
+        # TODO: data and kernel layouts should be infered with check_data_format method
         data_layout = "NCHW"
         kernel_layout = "OIHW"
         
@@ -370,7 +358,7 @@ def _convert_advanced_activation():
 
 def _convert_pooling():
     def _impl(inputs, func, shapes):
-        # Get data_layout with check_data_layout
+        # Get data_layout with check_data_format
         pool_type = func.type
         data_layout = default_layout(len(shapes[0]) - 2, pool_type)
         if pool_type in ['GlobalMaxPooling','GlobalAveragePooling']:
@@ -411,7 +399,7 @@ def _convert_batchnorm():
 
         # Ignore momentum/decay_rate
         # By default NNabla includes scale and bias term, otherwise no_scale and no_bias 
-        # should be included in the parameters  
+        # should be included in the parameters 
         attrs = {'beta': inputs[1],
                   'gamma': inputs[2],
                   'moving_mean': inputs[3],
@@ -422,21 +410,26 @@ def _convert_batchnorm():
                   'scale': True}
   
         result, moving_mean, moving_var = _op.nn.batch_norm(inputs[0], **attrs)
+
         return result
 
     return _impl 
 
 def _convert_elemwise():
+    """ Element-wise operators between two arrays"""
+
     def _impl(inputs, func, shapes):
         op_name = func.type
         assert len(inputs) == 2, "Math operator {} take 2 inputs, {} given".format(op_name, len(inputs))
-        if op_name in ['Add2', 'Mul2', 'Div2', 'Sub2', 'Pow2']:
+        if op_name in ['Add2', 'Mul2', 'Div2', 'Sub2', 'Pow2', 'Minimum2','Maximum2']:
             # Operations with numpy-style broadcasting
             op_map = {'Add2': _op.add,
                       'Mul2': _op.multiply,
                       'Div2': _op.divide,
                       'Sub2': _op.subtract,
-                      'Pow2': _op.power}
+                      'Pow2': _op.power,
+                      'Minimum2': _op.minimum,
+                      'Maximum2': _op.maximum}
             result = op_map[op_name](inputs[0], inputs[1])
         elif op_name in ['Less', 'Greater', 'Equal']:
             # Broadcasted elementwise operators
@@ -462,12 +455,57 @@ def _convert_elemwise():
 
     return _impl
 
+def _convert_scalar_elemwise():
+    """ Element-wise operators that involve only one input array or one input
+        array with a scalar value."""
+    
+    def _impl(inputs, func, shapes):
+        op_name = func.type
+        if op_name in ['AddScalar', 'MinimumScalar', 'MaximumScalar', 'PowScalar',
+                       'MulScalar']:
+            op_map = {'AddScalar': [_op.add, func.add_scalar_param.val],
+                      'PowScalar': [_op.power, func.pow_scalar_param.val],
+                      'MinimumScalar': [_op.minimum, func.minimum_scalar_param.val],
+                      'MaximumScalar': [_op.maximum, func.maximum_scalar_param.val],
+                      'MulScalar': [_op.multiply, func.mul_scalar_param.val]}
+
+            value = op_map[op_name][1]
+            result = op_map[op_name][0](inputs[0], _expr.const(value))
+        elif op_name in ['RPowScalar']:
+            op_map = {'RPowScalar': [_op.power, func.r_pow_scalar_param.val]}
+
+            value = op_map[op_name][1]
+            result = op_map[op_name][0](_expr.const(value), inputs[0])
+        elif op_name == 'Round':
+            result = _op.round(inputs[0])
+        elif op_name == 'Log':
+            result = _op.log(inputs[0])
+        else:
+            raise tvm.error.OpNotImplemented(
+                'Operator {} is not yet implemented with frontend Nnabla'.format(op_name))
+
+        return result
+    return _impl
+
+def _convert_broadcast():
+    def _impl(inputs, func, shapes):
+        new_shape = tuple(func.broadcast_param.shape.dim)
+
+        return _op.broadcast_to(inputs[0], new_shape)
+    return _impl
+
 def _convert_flatten():
     def _impl(inputs, func, shapes):
-        # check data layout
+        # TODO: check data layout
         return _op.nn.batch_flatten(inputs[0])
 
-    return _impl 
+    return _impl
+
+def _convert_clip():
+    def _impl(inputs, func, shapes):
+        # TODO: Complete with clip operator
+        return None
+    return _impl
 
 def _convert_affine():
     def _impl(inputs, func, shapes):
@@ -508,7 +546,6 @@ def _convert_affine():
 # 
 # NNabla operators linked to the Relay converter
 # 
-
 _convert_map = {
     'SoftMax'                  : _convert_activation(),
     'ReLU'                     : _convert_activation(),
@@ -533,6 +570,8 @@ _convert_map = {
     'Div2'                     : _convert_elemwise(),
     'Pow2'                     : _convert_elemwise(),
     'Sub2'                     : _convert_elemwise(),
+    'Maximum2'                 : _convert_elemwise(),
+    'Minimum2'                 : _convert_elemwise(),
     'Less'                     : _convert_elemwise(),
     'Greater'                  : _convert_elemwise(),
     'Equal'                    : _convert_elemwise(),
@@ -540,6 +579,17 @@ _convert_map = {
     'LogicalNot'               : _convert_elemwise(),
     'LogicalOr'                : _convert_elemwise(),
     'LogicalXor'               : _convert_elemwise(),
+    'MaximumScalar'            : _convert_scalar_elemwise(),
+    'MinimumScalar'            : _convert_scalar_elemwise(),
+    'PowScalar'                : _convert_scalar_elemwise(),
+    'RPowScalar'               : _convert_scalar_elemwise(),
+    'AddScalar'                : _convert_scalar_elemwise(),
+    'MulScalar'                : _convert_scalar_elemwise(),
+    'Log'                      : _convert_scalar_elemwise(),
+    'Round'                    : _convert_scalar_elemwise(),
+    'Broadcast'                : _convert_broadcast(),
+    'Clip'                     : _convert_clip(),
+
 
     'Flatten'                  : _convert_flatten(),
     'Reshape'                  : _convert_reshape(),
@@ -547,8 +597,8 @@ _convert_map = {
     'BatchNormalization'       : _convert_batchnorm(),
     'Affine'                   : _convert_affine(),
 
-    'FixedPointQuantize'       : _none(),
-    'Pow2Quantize'             : _none(),
+    'FixedPointQuantize'       : qnn_nnabla._convert_quantize(),#_none(),
+    'Pow2Quantize'             : qnn_nnabla._convert_quantize(),   
 }
 
 # #############################################################################
@@ -560,6 +610,11 @@ def get_converter(op):
     return _convert_map[op]
 
 class NNablaGraph(object):
+    """ NNabla Graph data extracted from .nnp file
+    Object initializes the network saved in the loaded .nnp file and
+    extracts key information to convert the operators into Relay IR.
+    Follows the method in which NNabla exports the graph to ONNX GraphProto.
+    """
     def __init__(self, nnp, shape, dtype, batch_size=1):
         # NNabla related variables
         self._nnp = nnp.protobuf        # nnabla graph as protobuf object
@@ -609,14 +664,12 @@ class NNablaGraph(object):
         for param in self._nnp.parameter:
             if param.variable_name in self._var_dict:
                 # Graph initializer
-                self.initializer[param.variable_name] = param 
+                self.initializer[param.variable_name] = param
 
                 # Graph Inputs
                 self.inputs[param.variable_name] =  param 
-        
             else:
                 print("Not in: {}".format(param.variable_name))
-
         for iv in exe.data_variable:
             # Graph Inputs
             self.inputs[iv.variable_name] = iv
@@ -636,6 +689,7 @@ class NNablaGraph(object):
             self.nodes[node_name] = f
 
     def create_graph(self):
+        """ Retrieve network and extract information """
         net = self._set_network()
         self._set_shape_all()
         for f in net.function:
@@ -645,7 +699,21 @@ class NNablaGraph(object):
         self._set_variables()
 
 class Exporter(ExprFunctor):
-    """ Add information """
+    """ A helper class for handling Relay expression copying from the Nnabla protobuf object.
+    Parameters
+    ----------
+    nnp : nnabla.utils.converter.nnabla.importer.NnpImporter 
+        The NNabla model to be converted from .nnp file, must contain
+        the protobuf object.
+
+    shape : dict of str to tuple, optional
+        The input shape of the graph.
+
+    dtype : str or dict of str to str
+        The input types of the graph.
+    
+    batch_size : int 
+        The batch size from the graph."""
     def __init__(self, nnp, shape, dtype, batch_size=1):
         # For Graph creation
         self._nnp = nnp 
@@ -663,7 +731,12 @@ class Exporter(ExprFunctor):
         # For Value infering
         self._temp_params = {}
         self._mod = None
-        self._infer_simulated = True 
+        self._infer_simulated = True
+
+        # For Quantization Pass
+        self._quantized = False
+        self._prev_node = None
+
         super(Exporter, self).__init__()
 
     def _parse_array(self, param):
@@ -673,11 +746,47 @@ class Exporter(ExprFunctor):
             shape = infer_nnabla_shape(param.shape.dim)
             np_array = np.array(param.data, dtype="float32").reshape(tuple(shape))
         elif isinstance(param, (np.ndarray, np.generic)):
+            # TODO: check datatype
             np_array =  param
         return _nd.array(np_array)
     
-    # def _parse_dtype(self, func):
-    #     TODO: Create dtype parser to pass the correct datatype to Relay
+    def _parse_dtype(self, func):
+        # TODO: Create dtype parser to pass the correct datatype to Relay
+        return None
+    
+    def _update_quantized_params(self, node, quantizer, inputs, shapes):
+        """ Helper function to replace full-precision weights with quantized
+            weights obtained from QAT simulated values."""
+
+        # Pop weight or bias in floating point
+        self._params.pop(node.input[0])
+        # Pop simulated weight or bias in floating point
+        self._params.pop(node.output[0])
+        assert (node.output[0] not in self._params \
+                and node.input[0] not in self._params)
+
+        # Update params dict with quantized value
+        # Replace e.g.: conv1/quantized_conv/W by conv1/quantized_conv/W_q
+        # in parameters
+        self._params[node.output[0]] = quantizer._quantized_values
+
+        # Pop Quantization operator from nodes
+        # First pop the corresponding floating point node
+        self._nodes.pop(quantizer._inputs)
+        # Second pop the quantized node saved as floating point
+        self._nodes.pop(quantizer._outputs)
+        # Create new Relay Var with quantized parameter and save it
+        # as node
+        q_name = quantizer._outputs
+        self._nodes[q_name] = new_var(q_name,
+                                        shape=self._params[q_name].shape,
+                                        dtype=self._params[q_name].dtype)
+        # Final check
+        assert node.output[0] in self._nodes
+
+        # Inputs and Shapes should be modified too as they have changed
+        inputs.replace(node.input[0], node.output[0], self._nodes[q_name])
+        shapes.replace(node.input[0], node.output[0], shapes[node.input[0]])
     
     def _convert_operator(self, input_data, func, shapes):
         """ Convert NNabla operator into Relay Operator
@@ -705,9 +814,13 @@ class Exporter(ExprFunctor):
         sym : tvm.relay.function.Function
             Converted relay function
         """
-        op_type = func.type 
+        op_type = func.type
         if op_type in _convert_map:
-            sym = _convert_map[op_type](input_data, func, shapes)
+            if self._quantized :
+                _convert_map.update(qnn_nnabla._convert_map)
+                sym = _convert_map[op_type](input_data, func, shapes)
+            else:
+                sym = _convert_map[op_type](input_data, func, shapes)
         else:
             raise tvm.error.OpNotImplemented(
                 'Operator {} is not supported for frontend NNabla.'.format(op_type))
@@ -756,7 +869,6 @@ class Exporter(ExprFunctor):
                                               shape=self._params[i_name].shape,
                                               dtype=self._params[i_name].dtype)
             else:
-                
                 self._num_input += 1
                 if i_name in self._shape:
                     tshape = list(self._shape[i_name])
@@ -787,18 +899,27 @@ class Exporter(ExprFunctor):
         
             node = graph.nodes[op_name]
             # Assert self._params type to be dictionary of str to tvm.nd.NDArray
+            
             inputs = nnabla_input()
             shapes = nnabla_input()
             for i in node.input:
                 inputs[i] = self._nodes[i]
                 shapes[i] = self._shape[i]
-            if node.output[0] == 'y':
-                shapes['y'] = self._shape['y']
+
+            # if node.output[0] == 'y':
+            #     shapes['y'] = self._shape['y']
+            # Hardcoded Affine condition
+            if op_type == 'Affine':
+                # Nnabla affine operator requires output shape for
+                # correct conversion
+                shapes[node.output[0]] = self._shape[node.output[0]]
             if op_type == 'Constant':
                 # Constant value initialized to 0.0
                 # TODO: Check how to obtain Constant value from Nnabla
+                dtype = "int32" if self._quantized else "float32"
+                # dtype = "float32"
                 constant_tensor = np.zeros(tuple(node.constant_param.shape.dim),
-                                           dtype="float32")
+                                           dtype=dtype)
                 self._num_param += 1 
                 array = self._parse_array(constant_tensor)
                 self._params[node.output[0]] = array
@@ -806,6 +927,38 @@ class Exporter(ExprFunctor):
                     node.output[0],
                     shape=list(array.shape),
                     dtype=array.dtype)
+            elif op_type in ['Pow2Quantize', 'FixedPointQuantize']:
+                self._quantized = True
+                # The quantizer for Conv2d and Affine operators quantizes
+                # the weights and biases. 
+                # In the case of activation quantization, quantization is applied 
+                # after each Batch Normalization operator. This step should check 
+                # which kind if quantization has to be performed.
+                if self._prev_node != None and self._prev_node.type \
+                    in ['BatchNormalization', 'Add2']:
+                    # Activation quantization after Batch Normalization
+                    op = self._convert_operator(inputs, node, shapes)
+                    node_output = node.output[0]
+                    if not isinstance(op, _expr.TupleWrapper):
+                        outputs_num = 1
+                    else:
+                        outputs_num = len(op)
+                    assert len(node.output) == outputs_num, (
+                        "Number of output mismatch {} vs {} in {}.".format(
+                            len(node.output), outputs_num, op_name))
+                    if outputs_num == 1:
+                        self._nodes[node_output] = op
+                    else:
+                        for k, i in zip(list(node.output), range(len(node.output))):
+                            self._nodes[k] = op[i]
+
+                else:
+                    # Weight and bias quantization for Convolution and Dense operator
+                    quantizer = qnn_nnabla.QNNNode(node, self._params[node.input[0]], 
+                                                self._params[node.output[0]])
+                    
+                    # Update parameters and nodes with quantized weights or bias
+                    self._update_quantized_params(node, quantizer, inputs, shapes)
             else:
                 op = self._convert_operator(inputs, node, shapes)
                 node_output = node.output[0]
@@ -822,11 +975,16 @@ class Exporter(ExprFunctor):
                     for k, i in zip(list(node.output), range(len(node.output))):
                         self._nodes[k] = op[i]
 
+            # Save node into pre_node, this node will only be used when quantization 
+            # is applied. In order to check whether activation quantization or
+            # weight/bias quantization should take place
+            self._prev_node = node 
+
         # 4- return the outputs
         outputs = [self._nodes[i] for i in graph.outputs]
         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
         func = _function.Function(analysis.free_vars(outputs), outputs)
-        
+
         return IRModule.from_expr(func), self._params 
 
 def from_nnabla(model, shape=None, dtype="float32"):
