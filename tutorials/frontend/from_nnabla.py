@@ -88,6 +88,9 @@ mod, params = relay.frontend.from_nnabla(nnabla_model, shape_dict)
 func = mod["main"]
 func = relay.Function(func.params, relay.nn.softmax(func.body), None, func.type_params, func.attrs)
 
+# Uncomment to see the IR of the Graph
+# print(func)
+
 target = 'llvm'
 
 with tvm.transform.PassContext(opt_level=4):
