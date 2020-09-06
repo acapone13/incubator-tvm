@@ -27,6 +27,7 @@
 #include <tvm/auto_scheduler/measure.h>
 #include <tvm/auto_scheduler/measure_record.h>
 #include <tvm/runtime/registry.h>
+#include <tvm/support/parallel_for.h>
 #include <tvm/te/operation.h>
 #include <tvm/te/schedule_pass.h>
 #include <tvm/tir/analysis.h>
@@ -1337,9 +1338,11 @@ void GetPerStoreFeaturesFromStates(const Array<State>& states, const SearchTask&
 
   std::atomic<int> error_ct(0);
 
-  for (size_t i = skip_first_n_feature_extraction; i < states.size(); ++i) {
-    GetPerStoreFeaturesWorkerFunc(task, states[i], max_n_bufs, &(*features)[i], &error_ct);
-  }
+  support::parallel_for(skip_first_n_feature_extraction, states.size(),
+                        [&task, &states, &max_n_bufs, &features, &error_ct](int i) {
+                          GetPerStoreFeaturesWorkerFunc(task, states[i], max_n_bufs,
+                                                        &(*features)[i], &error_ct);
+                        });
 
   if (error_ct > 0) {
     std::cerr << "Encountered " << error_ct
@@ -1355,9 +1358,11 @@ void GetPerStoreFeaturesFromStates(const Array<State>& states, const std::vector
 
   std::atomic<int> error_ct(0);
 
-  for (size_t i = skip_first_n_feature_extraction; i < states.size(); ++i) {
-    GetPerStoreFeaturesWorkerFunc(tasks[i], states[i], max_n_bufs, &(*features)[i], &error_ct);
-  }
+  support::parallel_for(skip_first_n_feature_extraction, states.size(),
+                        [&tasks, &states, &max_n_bufs, &features, &error_ct](int i) {
+                          GetPerStoreFeaturesWorkerFunc(tasks[i], states[i], max_n_bufs,
+                                                        &(*features)[i], &error_ct);
+                        });
 
   if (error_ct > 0) {
     std::cerr << "Encountered " << error_ct
@@ -1496,21 +1501,27 @@ void GetPerStoreFeaturesFromMeasurePairs(const Array<MeasureInput>& inputs,
 /*
  * \brief Serialize a two-dimensional variable-size feature vector with normalized throughputs
  * and task ids to a one-dimensional flatten byte array.
- * We have to serialize it for faster transmission speed when copying it to python.
- * This flatten array will be deserialized in python.
  *
- * serialization format for n records:
+ * For faster data copy between c++ and python, the c++ part returns features in a single
+ * flatten array using a packed format. The python part then unpacks the flatten array.
  *
- * int n;
- * int[n+2] sizes
+ * The packed format for n records is:
+ * {
+ *   int   n;
+ *   int   sizes[n+2];           // The sizes for the following arrays
  *
- * float[sizes[0]]    feature for record 1
- * float[sizes[1]]    feature for record 2
- * ...                feature for record i...
- * float[sizes[n-1]]  feature for record n
+ *   float features_0[size[0]];  // The features for record 0
+ *   float features_1[size[1]];  // The features for record 1
+ *   ...
+ *   float features_i[size[i]];  // The features for record i
+ *   ... // until i == n - 1
  *
- * float[sizes[n]]    normalized throughput for n records
- * int[sizes[n+1]]    task id for n records
+ *   float throuputs[sizes[n]];  // The normalized throughputs for n records
+ *   int   task_ids[size[n+1];   // The task ids for n records
+ *
+ * }
+ * To implement this format, we also store int as float, so we can store all numbers
+ * into a single float array.
  */
 TVMByteArray SerializeFeatures(std::vector<std::vector<float>>&& features,
                                std::vector<float>&& normalized_throughputs,
