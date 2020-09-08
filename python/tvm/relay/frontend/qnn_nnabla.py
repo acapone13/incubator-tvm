@@ -30,6 +30,7 @@ from tvm.relay.frontend.common import infer_shape, infer_channels
 from tvm.relay.expr_functor import ExprMutator
 from tvm.relay import transform as _transform 
 from tvm.ir import IRModule 
+from .common import infer_type
 from ... import nd as _nd
 import pdb
 
@@ -70,6 +71,7 @@ class QNNNode:
         if self._qtype == 'Pow2Quantize':
             _bw = func.pow2_quantize_param.n
             self._params['sign'] = func.pow2_quantize_param.sign
+            self._params['with_zero'] = func.pow2_quantize_param.with_zero
             self._params['ste'] = func.pow2_quantize_param.ste_fine_grained
             self._params['bitwidth'] = _bw
             
@@ -99,23 +101,22 @@ class QNNNode:
             self._params['ste'] = func.fixed_point_quantize_param.ste_fine_grained
             self._params['bitwidth'] = _bw
             self._params['delta'] = func.fixed_point_quantize_param.delta
-            # TODO: Training delta can differ from inference calculated delta,
-            #       avoid asserting delta for now.
+            # TODO: Training stepsize can differ from inference calculated delta,
+            #       avoid asserting stepsize for now.
             # assert self._params['delta'] != find_delta(self._params, _bw)
 
     def _set_weight_quant_params(self, values):
         """ Convert simulated params values into quantized params """
         tmp_values = values.asnumpy()
         if self._qtype == 'Pow2Quantize':
-            # d = self._params['delta']
-            dtype = self._infer_datatype()
-            tmp_values = (-1 * np.sign(tmp_values) * np.log2(np.abs(tmp_values))).astype(dtype)
+            # dtype = self._infer_datatype()
+            # tmp_values = (-1 * np.sign(tmp_values) * np.log2(np.abs(tmp_values))).astype(dtype)
             self._quantized_values = _nd.array(tmp_values)
 
         elif self._qtype == 'FixedPointQuantize':
-            delta = self._params['delta']
-            dtype = self._infer_datatype()
-            tmp_values = (tmp_values * (delta ** (-1))).astype(dtype) 
+            # delta = self._params['delta']
+            # dtype = self._infer_datatype()
+            # tmp_values = (tmp_values * (delta ** (-1))).astype(dtype) 
             self._quantized_values = _nd.array(tmp_values)
         else:
             msg = '{} not implemented in TVM.'
@@ -169,34 +170,104 @@ def find_delta(w, bw):
     else:
         return 2**(np.floor(np.log2(maxabs_w/(2**(bw-1)-1))))
 
-def _convert_quantize():
+def _convert_fixed_point_quantize():
     """ Function that retrieves the uniformly quantized values simulated during
         training. Should output the input value in fixed-point representation."""
-    # For the moment this method is used to test the quantization of activations.
-    # TODO: Check output values.
 
     def _impl(inputs, func, shapes):
-        op_type = func.type 
-        if op_type == "FixedPointQuantize":
-            _bw = func.fixed_point_quantize_param.n
-            _ste = func.fixed_point_quantize_param.ste_fine_grained
-            _delta = func.fixed_point_quantize_param.delta
-
-            _delta = int(_delta ** (-1))
-            
-            inputs[0] = _op.multiply(inputs[0], _expr.const(_delta))
-            return inputs[0]
-
-            # return _op.nn.relu(inputs[0])
-        elif op_type == "Pow2Quantize":
-            #
-            delta = find_delta()
-            
-            return None
+        # Function Parameters extracted from NNabla. Stepsize is 
+        # pre-calculated during training and should be available as
+        # a parameter
+        _bw = func.fixed_point_quantize_param.n
+        _ste = func.fixed_point_quantize_param.ste_fine_grained
+        _delta = func.fixed_point_quantize_param.delta
+        # For quantized ReLU, sign is ommited and variable is
+        # not stored. Otherwise it will be stored with
+        # the true value
+        _sign = func.fixed_point_quantize_param.sign
+        # import pdb 
+        # pdb.set_trace()
+        if _sign:
+            _max = ((1 << (_bw - 1)) - 1.0) * _delta
+            _min = -(_max)
         else:
-            # TODO: min_max_quantize will arrive here as it's not yet implemented
-            msg = '{} not implemented in TVM.'
-            raise tvm.error.OpNotImplemented(msg.format(self._qtype))
+            _max = ((1 << _bw) - 1.0) * _delta
+            _min = 0.
+        _input_shape = tuple(shapes[0])
+
+        # inputs[0] = _op.cast(inputs[0], "float32")
+
+        # Get original sign
+        sign_val = _op.sign(inputs[0])
+        # tmp_qi =  floor((|xi|*d**-1) + (2**-1))
+        _tmp = _op.abs(inputs[0])
+        _tmp = _op.divide(_tmp, _expr.const(_delta))
+        _tmp = _op.add(_tmp, _expr.const(0.5))
+        _tmp = _op.floor(_tmp)
+        # qi = sign(xi) * tmp_qi
+        out = _op.multiply(sign_val, _tmp)
+        # For simulated quantized value, multiply but the stepsize,
+        # otherwise comment following line
+        out = _op.multiply(out, _expr.const(_delta))
+        # Modify quantized values not to exceed the maximum and minimum
+        # values
+        _max_const = _op.full(_expr.const(_max), _input_shape)
+        _min_const = _op.full(_expr.const(_min), _input_shape)
+        out = _op.where((inputs[0] > _max_const), _max_const, out)
+        out = _op.where((inputs[0] < _min_const), _min_const, out)
+        # TODO: Test real quantization value
+        # out = _op.cast(out, "int32")
+        
+        return out
+
+    return _impl
+
+def _convert_pow2_quantize():
+    """ Function that retrieves the uniformly quantized values simulated during
+        training. Should output the input value in fixed-point representation."""
+
+    def _impl(inputs, func, shapes):
+        # Function Parameters extracted from NNabla. Stepsize is 
+        # pre-calculated during training and should be available as
+        # a parameter
+        _n = func.pow2_quantize_param.n
+        _sign = func.pow2_quantize_param.sign
+        _with_zero = func.pow2_quantize_param.with_zero
+        _m = func.pow2_quantize_param.m
+
+        _bw = _n - 1 if _sign else _n
+        _bw = _bw -1 if _with_zero else _bw
+        _input_shape = tuple(shapes[0])
+
+        _ref_p_max = 2 ** _m
+        _ref_p_min = 2 ** (_m - ((1 << _bw) - 1))
+        _ref_pruning_threshold = _ref_p_min * (2. ** -0.5)
+
+
+        _tmp = _op.round(_op.log2(_op.abs(inputs[0])))
+        _tmp = _op.power(_expr.const(2.), _tmp)
+        _ref_max_const = _op.full(_expr.const(_ref_p_max), _input_shape)
+        _ref_min_const = _op.full(_expr.const(_ref_p_min), _input_shape)
+        _tmp = _op.where((_tmp > _ref_max_const), _ref_max_const, _tmp)
+        if _with_zero:
+            _tmp_q = _op.copy(_tmp)
+            _tmp_q = _op.where((_tmp_q < _ref_min_const), _ref_min_const, _tmp_q)
+            _ref_pruning = _op.full(_expr.const(_ref_pruning_threshold), _input_shape)
+            _zeros = _op.zeros(_input_shape, "float32")
+            _tmp_q = _op.where((_op.abs(inputs[0]) < _ref_pruning), _zeros, _tmp)
+        if not _with_zero:
+            _tmp_q = _op.where((_tmp < _ref_min_const), _ref_min_const, _tmp)
+        if _sign:
+            out = _op.multiply(_op.sign(inputs[0]), _tmp)
+        else:
+            _zeros = _op.zeros(_input_shape, "float32")
+            if _with_zero:
+                out = _op.where((_op.sign(inputs[0]) < _zeros), _zeros, _tmp_q)
+            else:
+                out = _op.where((_op.sign(inputs[0]) < _zeros), _ref_min_const, _tmp_q)
+
+        return out
+
     return _impl
 
 def _convert_quantized_conv():
@@ -217,12 +288,12 @@ def _convert_quantized_conv():
 
         # Quantize inputs
         if func.input[0] == 'x':
-            # inputs[0] = _op.round(inputs[0])
-            # inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
+            inputs[0] = _op.round(inputs[0])
+            inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
             inputs[0] = _op.cast(inputs[0], 'int8')
-        else:
-            inputs[0] = _op.clip(inputs[0], a_min=-7.0, a_max=7.0)
-            inputs[0] = _op.cast(inputs[0], 'int8')
+        # else:
+        #     # inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
+        #     inputs[0] = _op.cast(inputs[0], 'int8')
         
         conv_out = _op.nn.conv2d(inputs[0],
                                  inputs[1],
@@ -342,21 +413,43 @@ def _convert_quantized_batchnorm():
         result, moving_mean, moving_var = _op.nn.batch_norm(inputs[0], **attrs)
 
         # Quantize batch_normalization output: float32 -> int32
-        result = _quantize(result, sys.maxint, -sys.minint)
+        # result = _quantize(result, sys.maxsize, -sys.maxsize)
 
         return result
 
-    return _impl 
+    return _impl
 
+def _convert_quantized_elemwise():
+    """ Element-wise operators between two arrays"""
+
+    def _impl(inputs, func, shapes):
+        op_name = func.type
+        assert len(inputs) == 2, "Math operator {} take 2 inputs, {} given".format(op_name, len(inputs))
+        if op_name in ['Add2', 'Mul2', 'Div2', 'Sub2', 'Pow2', 'Minimum2','Maximum2']:
+            # Operations with numpy-style broadcasting
+            op_map = {'Add2': _op.add,
+                      'Mul2': _op.multiply,
+                      'Div2': _op.divide,
+                      'Sub2': _op.subtract,
+                      'Pow2': _op.power,
+                      'Minimum2': _op.minimum,
+                      'Maximum2': _op.maximum}
+            inputs[0] = _op.round(inputs[0])
+            inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
+            inputs[0] = _op.cast(inputs[0], "int8")
+            result = op_map[op_name](inputs[0], inputs[1])
+
+        return result
+    return _impl
 # Converter map with custom operators
 # Include quantization operators or special operators designed
 # for tests in here.
 # In case of quantization aware inference, this map will update the
 # full-precision defined methods.
 _convert_map = {
-    'FixedPointQuantize'       : _convert_quantize(),
-    'Pow2Quantize'             : _convert_quantize(),
-
+    # 'FixedPointQuantize'       : _convert_fixed_point_quantize(),
+    # 'Pow2Quantize'             : _convert_pow2_quantize(),
+    'Add2'                     : _convert_quantized_elemwise(),
     'Convolution'              : _convert_quantized_conv(),
     'Affine'                   : _convert_quantized_affine(),
     'BatchNormalization'       : _convert_quantized_batchnorm()

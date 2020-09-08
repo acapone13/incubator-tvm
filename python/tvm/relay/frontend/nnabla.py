@@ -597,8 +597,8 @@ _convert_map = {
     'BatchNormalization'       : _convert_batchnorm(),
     'Affine'                   : _convert_affine(),
 
-    'FixedPointQuantize'       : qnn_nnabla._convert_quantize(),#_none(),
-    'Pow2Quantize'             : qnn_nnabla._convert_quantize(),   
+    'FixedPointQuantize'       : qnn_nnabla._convert_fixed_point_quantize(),
+    'Pow2Quantize'             : qnn_nnabla._convert_pow2_quantize(),   
 }
 
 # #############################################################################
@@ -896,7 +896,7 @@ class Exporter(ExprFunctor):
         for n in graph.nodes:
             op_type = graph.nodes[n].type
             op_name = graph.nodes[n].name
-        
+
             node = graph.nodes[op_name]
             # Assert self._params type to be dictionary of str to tvm.nd.NDArray
             
@@ -916,8 +916,8 @@ class Exporter(ExprFunctor):
             if op_type == 'Constant':
                 # Constant value initialized to 0.0
                 # TODO: Check how to obtain Constant value from Nnabla
-                dtype = "int32" if self._quantized else "float32"
-                # dtype = "float32"
+                # dtype = "int32" if self._quantized else "float32"
+                dtype = "float32"
                 constant_tensor = np.zeros(tuple(node.constant_param.shape.dim),
                                            dtype=dtype)
                 self._num_param += 1 
@@ -928,14 +928,14 @@ class Exporter(ExprFunctor):
                     shape=list(array.shape),
                     dtype=array.dtype)
             elif op_type in ['Pow2Quantize', 'FixedPointQuantize']:
-                self._quantized = True
+                # self._quantized = True
                 # The quantizer for Conv2d and Affine operators quantizes
                 # the weights and biases. 
                 # In the case of activation quantization, quantization is applied 
                 # after each Batch Normalization operator. This step should check 
                 # which kind if quantization has to be performed.
-                if self._prev_node != None and self._prev_node.type \
-                    in ['BatchNormalization', 'Add2']:
+                if (self._prev_node != None and self._prev_node.type \
+                    in ['BatchNormalization', 'Add2']):
                     # Activation quantization after Batch Normalization
                     op = self._convert_operator(inputs, node, shapes)
                     node_output = node.output[0]
