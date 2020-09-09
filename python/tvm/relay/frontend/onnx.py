@@ -41,6 +41,7 @@ from .common import infer_type, get_name
 from .common import infer_value as _infer_value
 from .common import infer_value_simulated as _infer_value_simulated
 
+import pdb
 __all__ = ['from_onnx']
 
 g = None

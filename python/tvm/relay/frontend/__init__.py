@@ -34,3 +34,5 @@ from .tensorflow import from_tensorflow
 from .darknet import from_darknet
 from .pytorch import from_pytorch
 from .caffe import from_caffe
+# Nnabla frontend test
+from .nnabla import from_nnabla
