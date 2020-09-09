@@ -27,6 +27,7 @@
 #include <tvm/auto_scheduler/search_policy.h>
 #include <tvm/auto_scheduler/transform_step.h>
 #include <tvm/runtime/registry.h>
+#include <tvm/support/parallel_for.h>
 #include <tvm/te/operation.h>
 #include <tvm/te/schedule.h>
 #include <tvm/te/schedule_pass.h>
@@ -547,17 +548,25 @@ class FlopEstimator : public ExprFunctor<double(const PrimExpr& n)> {
     double ret = 0;
     for (const auto& op : ops) {
       if (auto pop = op.as<te::ComputeOpNode>()) {
-        double num_element = AxisLengthProd(pop->axis);
-        if (num_element == -1) {
-          fail_ = true;
-          break;
+        if (pop->attrs.count("FLOP")) {
+          // Use user-provided FLOP
+          auto pint = pop->attrs["FLOP"].as<IntImmNode>();
+          CHECK(pint != nullptr);
+          ret += pint->value;
+        } else {
+          // Estimate by parsing the compute body
+          double num_element = AxisLengthProd(pop->axis);
+          if (num_element == -1) {
+            fail_ = true;
+            break;
+          }
+          cur_type_code_ = pop->output_dtype(0).code();
+          double op_per_element = 0;
+          for (const auto& x : pop->body) {
+            op_per_element += VisitExpr(x);
+          }
+          ret += num_element * op_per_element;
         }
-        cur_type_code_ = pop->output_dtype(0).code();
-        double op_per_element = 0;
-        for (const auto& x : pop->body) {
-          op_per_element += VisitExpr(x);
-        }
-        ret += num_element * op_per_element;
       } else if (op->IsInstance<te::PlaceholderOpNode>()) {
         {}  // do nothing
       } else {
@@ -803,17 +812,18 @@ State ComputeDAG::InferBound(const State& state) const {
 }
 
 Array<State> ComputeDAG::InferBound(const Array<State>& states) const {
-  Array<State> out_states;
-  // TODO(jcf94, merrymercy): Use parallel_for to run this in parallel
-  for (const auto& state : states) {
-    State out_state;
+  Array<State> out_states(states.size(), State());
+
+  support::parallel_for(0, states.size(), [this, &states, &out_states](int i) {
     try {
-      out_state = this->InferBound(state);
+      out_states.Set(i, this->InferBound(states[i]));
     } catch (dmlc::Error& e) {
-      LOG(WARNING) << "InferBound fails on the state:\n" << state << "\n" << e.what() << std::endl;
+      LOG(WARNING) << "InferBound fails on the state:\n"
+                   << states[i] << "\n"
+                   << "with: " << e.what() << std::endl;
     }
-    out_states.push_back(std::move(out_state));
-  }
+  });
+
   return out_states;
 }
 

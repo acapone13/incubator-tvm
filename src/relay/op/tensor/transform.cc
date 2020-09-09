@@ -886,8 +886,6 @@ RELAY_REGISTER_OP("scatter_add")
     .set_attr<TOpPattern>("TOpPattern", kOpaque)
     .set_support_level(10);
 
-////
-
 // Take
 TVM_REGISTER_NODE_TYPE(TakeAttrs);
 
@@ -994,10 +992,9 @@ TVM_REGISTER_NODE_TYPE(InitOpAttrs);
 
 bool FullRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
              const TypeReporter& reporter) {
-  CHECK_EQ(types.size(), 3);
+  CHECK_EQ(types.size(), 2);
   const InitOpAttrs* param = attrs.as<InitOpAttrs>();
   const auto* fill_value = types[0].as<TensorTypeNode>();
-  const auto* fill_shape = types[1].as<TensorTypeNode>();
   if (fill_value == nullptr) {
     return false;
   }
@@ -1010,38 +1007,27 @@ bool FullRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   CHECK_EQ(fill_value->shape.size(), 0)
       << "Fill value should be a scalar but has dimension " << fill_value->shape.size() << ".";
 
-  const IntImmNode* shape_shape = fill_shape->shape[0].as<IntImmNode>();
-  CHECK(shape_shape) << "Parameter shape must have static shape";
-
   std::vector<IndexExpr> oshape;
-  if (param->shape) {
-    const Array<Integer>& cshape_array = param->shape.value();
-    for (size_t i = 0; i < cshape_array.size(); ++i) {
-      oshape.push_back(cshape_array[i]);
-    }
-  } else {
-    for (int i = 0; i < shape_shape->value; ++i) {
-      oshape.push_back(Any());
-    }
+  const Array<Integer>& cshape_array = param->shape.value();
+  for (size_t i = 0; i < cshape_array.size(); ++i) {
+    oshape.push_back(cshape_array[i]);
   }
-  reporter->Assign(types[2], TensorType(oshape, out_dtype));
+  reporter->Assign(types[1], TensorType(oshape, out_dtype));
   return true;
+}
+
+Expr MakeFull(Expr fill_value, Array<Integer> shape, DataType dtype) {
+  auto attrs = make_object<InitOpAttrs>();
+  attrs->dtype = std::move(dtype);
+  attrs->shape = std::move(shape);
+  static const Op& op = Op::Get("full");
+  return Call(op, {fill_value}, Attrs(attrs), {});
 }
 
 Array<te::Tensor> FullCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
                               const Type& out_type) {
   const auto* out_ttype = out_type.as<TensorTypeNode>();
   return {topi::full(out_ttype->shape, out_ttype->dtype, inputs[0]())};
-}
-
-Expr MakeFull(Expr fill_value, Expr shape, DataType dtype) {
-  auto attrs = make_object<InitOpAttrs>();
-  if (const auto* cshape = shape.as<ConstantNode>()) {
-    attrs->shape = ToVector(cshape->data);
-  }
-  attrs->dtype = std::move(dtype);
-  static const Op& op = Op::Get("full");
-  return Call(op, {fill_value, shape}, Attrs(attrs), {});
 }
 
 TVM_REGISTER_GLOBAL("relay.op._make.full").set_body_typed(MakeFull);
@@ -1051,9 +1037,8 @@ RELAY_REGISTER_OP("full")
 
 )code" TVM_ADD_FILELINE)
     .set_attrs_type<InitOpAttrs>()
-    .set_num_inputs(2)
+    .set_num_inputs(1)
     .add_argument("fill_value", "double", "The value to fill.")
-    .add_argument("shape", "Tensor", "Target shape.")
     .set_support_level(3)
     .add_type_rel("Full", FullRel)
     .set_attr<FTVMCompute>("FTVMCompute", FullCompute)
@@ -1677,7 +1662,12 @@ bool WhereRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
           << "condition and x must have the same shape: " << cond_shape << " vs " << x_shape;
     }
   }
-  reporter->Assign(types[3], TensorType(x_shape, x->dtype));
+  if (x_shape.size() == 0) {
+    // if x and y are scalar, the condition shape becomes the output shape
+    reporter->Assign(types[3], TensorType(cond_shape, x->dtype));
+  } else {
+    reporter->Assign(types[3], TensorType(x_shape, x->dtype));
+  }
   return true;
 }
 
@@ -1709,6 +1699,9 @@ size is the same as x’s first dimension size. Each row of the output array
 is from x’s row if the corresponding element from condition is true, and
 from y’s row if false.
 
+When x and y are scalars, condition must be an 1D array. The output shape
+is the same as condition's shape.
+
 Note that all non-zero values are interpreted as True in condition.
 
 Examples::
@@ -1721,6 +1714,9 @@ Examples::
 
   cond = [1, 0]
   where(cond, x, y) = [[1, 2], [7, 8]]
+
+  cond = [0, 1]
+  where(cond, 1, -1) = [-1, 1]
 
 )code" TVM_ADD_FILELINE)
     .add_argument("condition", "Tensor", "Condition array")
@@ -2411,7 +2407,10 @@ Array<te::Tensor> SplitCompute(const Attrs& attrs, const Array<te::Tensor>& inpu
     int64_t num_sections = sections->value;
     return Array<te::Tensor>{topi::split_sections(inputs[0], num_sections, param->axis)};
   } else {
-    auto indices = Downcast<Array<Integer>>(param->indices_or_sections);
+    Array<PrimExpr> indices;
+    for (auto i : Downcast<Array<Integer>>(param->indices_or_sections)) {
+      indices.push_back(IntImm(DataType::Int(32), i.as<IntImmNode>()->value));
+    }
     return Array<te::Tensor>{topi::split(inputs[0], indices, param->axis)};
   }
 }
@@ -3106,6 +3105,56 @@ RELAY_REGISTER_OP("sparse_to_dense")
     .set_attr<TOpPattern>("TOpPattern", kOpaque)
     .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
     .set_attr<FTVMCompute>("FTVMCompute", SparseToDenseCompute);
+
+// relay.matrix_set_diag
+bool MatrixSetDiagRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+                      const TypeReporter& reporter) {
+  // `types` contains: [input, diagonal, result]
+  CHECK_EQ(types.size(), 3);
+
+  const auto* input = types[0].as<TensorTypeNode>();
+  CHECK(input);
+
+  const auto* diagonal = types[1].as<TensorTypeNode>();
+  CHECK(diagonal);
+
+  int d_ndims = diagonal->shape.size();
+  for (int i = 0; i < d_ndims - 1; i++) {
+    reporter->AssertEQ(input->shape[i], diagonal->shape[i]);
+  }
+  auto min_dim = if_then_else(input->shape[d_ndims - 1] >= input->shape[d_ndims],
+                              input->shape[d_ndims], input->shape[d_ndims - 1]);
+  reporter->Assert(diagonal->shape[d_ndims - 1] >= min_dim);
+
+  reporter->Assign(types[2], TensorType(input->shape, input->dtype));
+  return true;
+}
+
+Array<te::Tensor> MatrixSetDiagCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
+                                       const Type& out_type) {
+  return Array<te::Tensor>{topi::matrix_set_diag(inputs[0], inputs[1])};
+}
+
+Expr MakeMatrixSetDiag(Expr input, Expr diagonal) {
+  static const Op& op = Op::Get("matrix_set_diag");
+  return Call(op, {input, diagonal}, Attrs(), {});
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.matrix_set_diag").set_body_typed(MakeMatrixSetDiag);
+
+RELAY_REGISTER_OP("matrix_set_diag")
+    .describe(
+        R"code(Returns a tensor with the diagonal of input tensor replaced with the provided diagonal values.
+        **input** Input tensor.
+        **diagonal** Values to be filled in the diagonal.
+    )code" TVM_ADD_FILELINE)
+    .set_num_inputs(2)
+    .add_argument("input", "Tensor", "Input Tensor.")
+    .add_argument("diagonal", "Tensor", "Values to be filled in the diagonal.")
+    .set_support_level(10)
+    .add_type_rel("MatrixSetDiag", MatrixSetDiagRel)
+    .set_attr<FTVMCompute>("FTVMCompute", MatrixSetDiagCompute)
+    .set_attr<TOpPattern>("TOpPattern", kInjective);
 
 }  // namespace relay
 }  // namespace tvm
