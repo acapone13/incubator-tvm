@@ -113,7 +113,7 @@ class QNNNode:
             # In order to use the simulated values in Floating-point precision comment the following
             # two lines
             # dtype = self._infer_datatype()
-            # tmp_values = (-1 * np.sign(tmp_values) * np.log2(np.abs(tmp_values))).astype("float32")
+            # tmp_values = (-1 * np.sign(tmp_values) * np.log2(np.abs(tmp_values))).astype(dtype)
             self._quantized_values = _nd.array(tmp_values)
 
         elif self._qtype == 'FixedPointQuantize':            
