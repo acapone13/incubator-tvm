@@ -41,5 +41,6 @@ def reconfig_rpc_runtime():
     remote = rpc.connect(host, port)
     reconfig_runtime(remote)
 
-program_rpc_bitstream()
+custom_bitstream = "../../../../../bitstreams/pynq_1x16_i4w4a32_15_14_17_17/vta.bit"
+program_rpc_bitstream(custom_bitstream)
 reconfig_rpc_runtime()

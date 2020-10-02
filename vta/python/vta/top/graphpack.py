@@ -16,7 +16,6 @@
 # under the License.
 # pylint: disable=unused-argument
 """A Relay implementation of graph packing."""
-import pdb
 import tvm
 from tvm import relay
 from tvm.relay import op, transform
@@ -251,9 +250,9 @@ class ExprPack(ExprMutator):
                                                                      self.cfactor)
                 kernel = _pack_weight(weight, kernel_shape, self.cfactor)
                 # insert bit packing when necessary
-                if w_lanes != 1:
-                    assert 8 % w_lanes == 0
-                    kernel = op.bitpack(kernel, lanes=w_lanes)
+                #if w_lanes != 1:
+                #    assert 8 % w_lanes == 0
+                #    kernel = op.bitpack(kernel, lanes=w_lanes)
 
                 conv2d = op.nn.conv2d(
                     data,
@@ -367,7 +366,6 @@ class ExprPack(ExprMutator):
                 data = op.transpose(data, axes=(0, 4, 1, 5, 2, 3))
                 return op.reshape(data, [int(x) for x in input_types[0].shape])
             elif call.op == self.concatenate:
-                # pdb.set_trace()
                 data, const = args[0] 
                 input_shape = input_types[0].fields[0].shape
                 input_dtype = input_types[0].fields[0].dtype

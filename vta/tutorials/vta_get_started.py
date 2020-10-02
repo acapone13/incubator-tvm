@@ -88,7 +88,7 @@ if env.TARGET == "pynq" or env.TARGET == "de10nano":
     # Program the FPGA with a pre-compiled VTA bitstream.
     # You can program the FPGA with your own custom bitstream
     # by passing the path to the bitstream file instead of None.
-    vta.program_fpga(remote, bitstream=None)
+    vta.program_fpga(remote, bitstream="../bitstreams/pynq_1x16_i4w4a32_15_14_17_17/vta.bit")
 
 # In simulation mode, host the RPC server locally.
 elif env.TARGET == "sim":
@@ -354,9 +354,9 @@ ctx = remote.ext_dev(0)
 
 # Initialize the A and B arrays randomly in the int range of (-128, 128]
 A_orig = np.random.randint(
-    -128, 128, size=(o * env.BATCH, m * env.BLOCK_OUT)).astype(A.dtype)
+    -8, 8, size=(o * env.BATCH, m * env.BLOCK_OUT)).astype(A.dtype)
 B_orig = np.random.randint(
-    -128, 128, size=(o * env.BATCH, m * env.BLOCK_OUT)).astype(B.dtype)
+    -8, 8, size=(o * env.BATCH, m * env.BLOCK_OUT)).astype(B.dtype)
 
 # Apply packing to the A and B arrays from a 2D to a 4D packed layout
 A_packed = A_orig.reshape(

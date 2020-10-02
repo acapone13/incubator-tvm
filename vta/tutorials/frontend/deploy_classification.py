@@ -188,7 +188,7 @@ with autotvm.tophub.context(target):
         relay_prog = mod["main"]
 
     # print(mod)
-    print(params)
+    #print(params)
     # Compile Relay program with AlterOpLayout disabled
     if target.device_name != "vta":
         with tvm.transform.PassContext(opt_level=3, disabled_pass={"AlterOpLayout"}):

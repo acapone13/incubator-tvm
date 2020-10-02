@@ -75,9 +75,9 @@ def conv2d_strategy_vta(attrs, inputs, out_type, target):
     if is_packed_layout(layout):
         if groups == 1:
             env = get_env()
-            assert env.LOG_INP_WIDTH == 3, "only support 8bit inp for now"
-            assert env.LOG_WGT_WIDTH == 3, "only support 8bit wgt for now"
-            assert kernel.dtype == "int8"
+            assert env.LOG_INP_WIDTH in [1, 2, 3], "only support 2, 4, 8bit inp for now"
+            assert env.LOG_WGT_WIDTH in [1, 2, 3], "only support 2, 4, 8bit wgt for now"
+            assert kernel.dtype in ["int2", "int4", "int8"]
 
             strategy.add_implementation(
                 _strategy.wrap_compute_conv2d(conv2d_packed, True),

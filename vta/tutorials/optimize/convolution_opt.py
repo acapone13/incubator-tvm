@@ -44,6 +44,7 @@ import vta
 import numpy as np
 
 from tvm import rpc
+from tvm import testing
 from tvm.contrib import util
 from vta.testing import simulator
 

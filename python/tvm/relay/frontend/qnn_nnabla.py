@@ -32,7 +32,6 @@ from tvm.relay import transform as _transform
 from tvm.ir import IRModule 
 from .common import infer_type
 from ... import nd as _nd
-import pdb
 
 # #############################################################################
 # Helper functions
@@ -109,12 +108,18 @@ class QNNNode:
         """ Convert simulated params values into quantized params """
         tmp_values = values.asnumpy()
         if self._qtype == 'Pow2Quantize':
+            # TODO: Find better way in which to convert the floating-point simulated values int
+            # real quantized values
+            # In order to use the simulated values in Floating-point precision comment the following
+            # two lines
             # dtype = self._infer_datatype()
-            # tmp_values = (-1 * np.sign(tmp_values) * np.log2(np.abs(tmp_values))).astype(dtype)
+            # tmp_values = (-1 * np.sign(tmp_values) * np.log2(np.abs(tmp_values))).astype("float32")
             self._quantized_values = _nd.array(tmp_values)
 
-        elif self._qtype == 'FixedPointQuantize':
-            # delta = self._params['delta']
+        elif self._qtype == 'FixedPointQuantize':            
+            delta = self._params['delta']
+            # In order to use the simulated values in Floating-point precision comment the following
+            # two lines
             # dtype = self._infer_datatype()
             # tmp_values = (tmp_values * (delta ** (-1))).astype(dtype) 
             self._quantized_values = _nd.array(tmp_values)
@@ -170,6 +175,38 @@ def find_delta(w, bw):
     else:
         return 2**(np.floor(np.log2(maxabs_w/(2**(bw-1)-1))))
 
+def _dequantize_fixed_point():
+    def _impl(input, func, scale):
+        op_type = func.type
+        out = _op.cast(input, "float32")
+        if op_type == 'Convolution': 
+            if isinstance(scale, float):
+                out = _op.multiply(out, _expr.const(scale, dtype="float32"))
+            elif isinstance(scale, list):
+                out = _op.multiply(out, _expr.const(scale[0] * scale[1], dtype="float32"))
+        else:
+            # TODO: Test dequantization for Affine function and integrate bias add
+            out = _op.multiply(out, _expr.const(scale[0], dtype="float32"))
+        return out
+
+    return _impl
+
+def _dequantize_pow2():
+    def _impl(input):
+        # TODO: Complete dequantization function for Pow2 operator
+        input = _op.cast(input, "float32")
+        sign = _op.sign(input)
+        out = _op.log2(_op.abs(input))
+        return out 
+    return _impl
+
+###############################################################################
+# TODO: For better integration between the NNabla quantization operators and
+# Relay, create the quantization Operators with TVM's Tensor IR and integrate
+# the functions into Relay. Instead of converting `fixed_point_quantize` and
+# `pow2_quantize` into subgroups of Relay operators, create a single quantize
+# operator.
+
 def _convert_fixed_point_quantize():
     """ Function that retrieves the uniformly quantized values simulated during
         training. Should output the input value in fixed-point representation."""
@@ -185,8 +222,6 @@ def _convert_fixed_point_quantize():
         # not stored. Otherwise it will be stored with
         # the true value
         _sign = func.fixed_point_quantize_param.sign
-        # import pdb 
-        # pdb.set_trace()
         if _sign:
             _max = ((1 << (_bw - 1)) - 1.0) * _delta
             _min = -(_max)
@@ -194,7 +229,6 @@ def _convert_fixed_point_quantize():
             _max = ((1 << _bw) - 1.0) * _delta
             _min = 0.
         _input_shape = tuple(shapes[0])
-
         # inputs[0] = _op.cast(inputs[0], "float32")
 
         # Get original sign
@@ -206,16 +240,19 @@ def _convert_fixed_point_quantize():
         _tmp = _op.floor(_tmp)
         # qi = sign(xi) * tmp_qi
         out = _op.multiply(sign_val, _tmp)
-        # For simulated quantized value, multiply but the stepsize,
+        # For simulated quantized value, multiply output with stepsize,
         # otherwise comment following line
         out = _op.multiply(out, _expr.const(_delta))
         # Modify quantized values not to exceed the maximum and minimum
         # values
-        _max_const = _op.full(_expr.const(_max), _input_shape)
-        _min_const = _op.full(_expr.const(_min), _input_shape)
+        _max_const = _op.full(_expr.const(_max), _input_shape, dtype="float32")
+        _min_const = _op.full(_expr.const(_min), _input_shape, dtype="float32")
+        
         out = _op.where((inputs[0] > _max_const), _max_const, out)
         out = _op.where((inputs[0] < _min_const), _min_const, out)
+        
         # TODO: Test real quantization value
+        out  = _op.multiply(out, _expr.const(_delta ** -1))
         # out = _op.cast(out, "int32")
         
         return out
@@ -227,6 +264,8 @@ def _convert_pow2_quantize():
         training. Should output the input value in fixed-point representation."""
 
     def _impl(inputs, func, shapes):
+        # TODO: Modify operator for better value convertion.
+
         # Function Parameters extracted from NNabla. Stepsize is 
         # pre-calculated during training and should be available as
         # a parameter
@@ -275,7 +314,11 @@ def _convert_quantized_conv():
         
         data_layout = "NCHW"
         kernel_layout = "OIHW"
-        
+
+        # Extract scale factor from shapes
+        if len(inputs) != len(shapes): 
+            scale = shapes[-2:] if len(shapes) == 4 else shapes[-1]
+
         # Extract information from nnabla node found in convolution_param
         _stride = tuple(func.convolution_param.stride.dim)
         _pad_w = func.convolution_param.pad.dim[0]
@@ -285,15 +328,15 @@ def _convert_quantized_conv():
         _group = func.convolution_param.group
         _output_channels = shapes[func.input[1]][0]
         _kernel_shape = tuple(shapes[func.input[1]][2:])
+        _out_dtype  = "float32"
 
         # Quantize inputs
-        if func.input[0] == 'x':
-            inputs[0] = _op.round(inputs[0])
-            inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
-            inputs[0] = _op.cast(inputs[0], 'int8')
-        # else:
-        #     # inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
-        #     inputs[0] = _op.cast(inputs[0], 'int8')
+        def _quant(input):
+            input = _op.round(input)
+            input = _op.clip(input, a_min=-127.0, a_max=127.0)
+            input = _op.cast(input, 'int8')
+            return input
+        inputs[0] = _quant(inputs[0])
         
         conv_out = _op.nn.conv2d(inputs[0],
                                  inputs[1],
@@ -301,18 +344,29 @@ def _convert_quantized_conv():
                                  padding=_pad,
                                  dilation=_dilation,
                                  groups=_group,
-                                 channels= _output_channels,
-                                 kernel_size= _kernel_shape,
+                                 channels=_output_channels,
+                                 kernel_size=_kernel_shape,
                                  data_layout=data_layout,
                                  kernel_layout=kernel_layout,
                                  out_layout="",
-                                 out_dtype="int32")
+                                 out_dtype=_out_dtype)
         
         use_bias = len(inputs) == 3
         if use_bias:
+            # TODO: Integrate dequantization of bias parameter into
+            # the dequantize function
             inputs[2] = _op.cast(inputs[2], "int32")
             conv_out = _op.nn.bias_add(conv_out, inputs[2])
 
+        
+        if len(inputs) != len(shapes):
+            # Dequantize FixedPoint quantize
+            conv_out = _dequantize_fixed_point()(conv_out, func, scale)
+        else:
+            # Dequantize Pow2 quantize
+            # TODO: Check Pow2 dequantization
+            conv_out = _dequantize_pow2()(conv_out)
+        
         return conv_out 
 
     return _impl
@@ -321,12 +375,25 @@ def _convert_quantized_gemm():
     def _impl(inputs, func, shapes):
         # Equivalent Op to GEMM in ONNX
         # Y = alpha * A * B + beta * C(If exists)
+
+        # Extract scale values
+        scale = shapes[-2:] if len(shapes) == 6 else shapes[-1]
+        shapes = shapes[:4] if len(shapes) == 6 else shapes[:3]
+ 
+        # Quantize inputs
+        def _quant(input):
+            input = _op.round(input)
+            input = _op.clip(input, a_min=-127.0, a_max=127.0)
+            input = _op.cast(input, 'int8')
+            return input
+        inputs[0] = _quant(inputs[0])
         
         # TODO: Infer values from NNabla Parameters
         alpha = int(1.0)
         beta = int(1.0)
         transA = 0
         transB = 0
+        _out_dtype = "int32"
 
         # get number of channels 
         channels = infer_channels(inputs[1], not transB)
@@ -339,12 +406,20 @@ def _convert_quantized_gemm():
         if alpha != 1:
             inputs[0] *= _expr.const(alpha)
         out = _op.nn.dense(inputs[0], inputs[1], units=channels,
-                           out_dtype='int32')
+                           out_dtype=_out_dtype)
+        
+        # Dequantize
+        out = _dequantize_fixed_point()(out, func, scale)
         
         use_bias = len(inputs) == 3
         if use_bias or (beta != 0):
-            inputs[2] = _op.cast(inputs[2], "int32") 
-            return _op.nn.bias_add(out, _expr.const(beta) * inputs[2])
+            # TODO: Integrate dequantization of bias parameter into
+            # the dequantize function
+            inputs[2] = _op.cast(inputs[2], "int32")
+            out = _op.cast(out, "int32") 
+            out = _op.nn.bias_add(out, _expr.const(beta) * inputs[2])
+            out = _op.cast(out, "float32")
+            return _op.multiply(out, _expr.const(scale[1], dtype="float32"))
         else:
             return out 
 
@@ -365,24 +440,13 @@ def _convert_quantized_affine():
         if x_shape_dims != x_shape:
             inputs[0] = _op.reshape(inputs[0], x_shape_dims)
 
-        # Quantize inputs
-        def _quant(input):
-            # input = _op.round(input)
-            input = _op.clip(input, a_min=-7.0, a_max=7.0)
-            input = _op.cast(input, 'int8')
-            return input
-        inputs[0] = _quant(inputs[0])
-        inputs[1] = _quant(inputs[1])
-
         # GEMM
         if gemm_output_shape == y_shape:
-            out = _convert_quantized_gemm()(inputs, func, shapes[:-1])
+            out = _convert_quantized_gemm()(inputs, func, shapes[:])
         else:
             raise tvm.error.OpAttributeInvalid(
                 'Operator {} does not currently support different \
                 output shapes'.format(func.type))
-
-        out = _op.cast(out, "float32")
 
         return  out
     
@@ -392,7 +456,7 @@ def _convert_quantized_batchnorm():
     def _impl(inputs, func, shapes):
 
         # Dequantize output from convolution: int32 -> float32
-        inputs[0] = _op.cast(inputs[0], "float32") 
+        # inputs[0] = _op.cast(inputs[0], "float32") 
 
         def _quantize(input, min_val=-127.0, max_val=127.0, dtype="int32"):
             input = _op.round(input)
@@ -434,9 +498,16 @@ def _convert_quantized_elemwise():
                       'Pow2': _op.power,
                       'Minimum2': _op.minimum,
                       'Maximum2': _op.maximum}
-            inputs[0] = _op.round(inputs[0])
-            inputs[0] = _op.clip(inputs[0], a_min=-127.0, a_max=127.0)
-            inputs[0] = _op.cast(inputs[0], "int8")
+
+            def _quantize(input, min_val=-127.0, max_val=127.0, dtype="float32"):
+                input = _op.round(input)
+                input = _op.clip(input, a_min=-127.0, a_max=127.0)
+                input = _op.cast(input, dtype)
+            
+                return input
+                
+            inputs[0] = _quantize(inputs[0])
+            inputs[1] = _quantize(inputs[1])
             result = op_map[op_name](inputs[0], inputs[1])
 
         return result
@@ -447,12 +518,12 @@ def _convert_quantized_elemwise():
 # In case of quantization aware inference, this map will update the
 # full-precision defined methods.
 _convert_map = {
-    # 'FixedPointQuantize'       : _convert_fixed_point_quantize(),
-    # 'Pow2Quantize'             : _convert_pow2_quantize(),
-    'Add2'                     : _convert_quantized_elemwise(),
+    'FixedPointQuantize'       : _convert_fixed_point_quantize(),
+    'Pow2Quantize'             : _convert_pow2_quantize(),
+    # 'Add2'                     : _convert_quantized_elemwise(),
     'Convolution'              : _convert_quantized_conv(),
     'Affine'                   : _convert_quantized_affine(),
-    'BatchNormalization'       : _convert_quantized_batchnorm()
+    # 'BatchNormalization'       : _convert_quantized_batchnorm()
 }        
 ###############################################################################
 # AVOID THIS SECTION OF CODE, IT WAS DEFINED TO TEST MUTATORS. 
@@ -532,8 +603,3 @@ _convert_map = {
 #     func = infer_type(func)
 
 #     return func 
-
-
-
-    
-

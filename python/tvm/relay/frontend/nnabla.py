@@ -310,6 +310,9 @@ def _convert_convolution():
         
         use_bias = len(inputs) == 3
 
+        if isinstance(shapes[-1], float):
+            conv_out = _op.multiply(conv_out, _expr.const(shapes[-1], dtype="float32"))
+
         if use_bias:
             return _op.nn.bias_add(conv_out, inputs[2])
         else:
@@ -322,7 +325,7 @@ def _convert_gemm():
     def _impl(inputs, func, shapes):
         # Equivalent Op to GEMM in ONNX
         # Y = alpha * A * B + beta * C(If exists)
-        
+
         # TODO: Infer values from NNabla Parameters
         alpha = float(1.0)
         beta = float(1.0)
@@ -515,7 +518,7 @@ def _convert_affine():
          - Reshape inputs
          - GEMM
          - Reshape
-        """
+        """ 
         # base_axis:  Base axis of Affine operation.
         base_axis = func.affine_param.base_axis
         x_shape = shapes[0]
@@ -597,8 +600,8 @@ _convert_map = {
     'BatchNormalization'       : _convert_batchnorm(),
     'Affine'                   : _convert_affine(),
 
-    'FixedPointQuantize'       : qnn_nnabla._convert_fixed_point_quantize(),
-    'Pow2Quantize'             : qnn_nnabla._convert_pow2_quantize(),   
+    'FixedPointQuantize'       : _none(),
+    'Pow2Quantize'             : _none(),   
 }
 
 # #############################################################################
@@ -669,7 +672,10 @@ class NNablaGraph(object):
                 # Graph Inputs
                 self.inputs[param.variable_name] =  param 
             else:
-                print("Not in: {}".format(param.variable_name))
+                # This condition will print whenever a parameter is not
+                # found.
+                # print("Not in: {}".format(param.variable_name))
+                pass
         for iv in exe.data_variable:
             # Graph Inputs
             self.inputs[iv.variable_name] = iv
@@ -736,6 +742,7 @@ class Exporter(ExprFunctor):
         # For Quantization Pass
         self._quantized = False
         self._prev_node = None
+        self._scale = {}
 
         super(Exporter, self).__init__()
 
@@ -906,8 +913,6 @@ class Exporter(ExprFunctor):
                 inputs[i] = self._nodes[i]
                 shapes[i] = self._shape[i]
 
-            # if node.output[0] == 'y':
-            #     shapes['y'] = self._shape['y']
             # Hardcoded Affine condition
             if op_type == 'Affine':
                 # Nnabla affine operator requires output shape for
@@ -928,7 +933,11 @@ class Exporter(ExprFunctor):
                     shape=list(array.shape),
                     dtype=array.dtype)
             elif op_type in ['Pow2Quantize', 'FixedPointQuantize']:
+                # TODO: In order to pass the simulated values to Relay in floating-point,
+                # without transforming the values into the real quantized datatype,
+                # we should comment the following flag. 
                 # self._quantized = True
+
                 # The quantizer for Conv2d and Affine operators quantizes
                 # the weights and biases. 
                 # In the case of activation quantization, quantization is applied 
@@ -951,7 +960,6 @@ class Exporter(ExprFunctor):
                     else:
                         for k, i in zip(list(node.output), range(len(node.output))):
                             self._nodes[k] = op[i]
-
                 else:
                     # Weight and bias quantization for Convolution and Dense operator
                     quantizer = qnn_nnabla.QNNNode(node, self._params[node.input[0]], 
@@ -959,7 +967,24 @@ class Exporter(ExprFunctor):
                     
                     # Update parameters and nodes with quantized weights or bias
                     self._update_quantized_params(node, quantizer, inputs, shapes)
+
+                # Save scale values to dequantize network after quantized operator
+                # execution 
+                if op_type == "FixedPointQuantize":
+                    self._scale[node.output[0]] = node.fixed_point_quantize_param.delta
+                else:
+                # TODO: Complete with Pow2Quantize method
+                    pass
             else:
+                # TODO: Avoid passing scale or other quantization parameters as shapes 
+                # because this will make the Relay Quantization Pass fail. This 
+                # part of the code should be uncommented only for testing purposes when
+                # weights or activations are converted into fixed-precision datatype.
+                # for i in node.input:
+                #     if i in self._scale:
+                #         scale_name = i + "/delta"
+                #         shapes[scale_name] = self._scale[i] 
+
                 op = self._convert_operator(inputs, node, shapes)
                 node_output = node.output[0]
                 if not isinstance(op, _expr.TupleWrapper):
@@ -984,6 +1009,10 @@ class Exporter(ExprFunctor):
         outputs = [self._nodes[i] for i in graph.outputs]
         outputs = outputs[0] if len(outputs) == 1 else _expr.Tuple(outputs)
         func = _function.Function(analysis.free_vars(outputs), outputs)
+
+        # Create pass for dequantization
+        if self._quantized:
+            pass
 
         return IRModule.from_expr(func), self._params 
 
@@ -1027,14 +1056,3 @@ def from_nnabla(model, shape=None, dtype="float32"):
     nnabla_model = None 
     
     return mod, params 
-
-
-
-
-
-
-    
-
-
-
-

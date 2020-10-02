@@ -203,8 +203,8 @@ if __name__ == '__main__':
     env = vta.get_env()
 
     # Get remote from fleet node
-    tracker_host = os.environ.get("TVM_TRACKER_HOST", None)
-    tracker_port = os.environ.get("TVM_TRACKER_PORT", None)
+    tracker_host = os.environ.get("TVM_TRACKER_HOST", '0.0.0.0')
+    tracker_port = os.environ.get("TVM_TRACKER_PORT", 9091)
     if not tracker_host or not tracker_port:
         print("Set your AutoTVM tracker node host and port variables to run the autotuner")
         exit()
